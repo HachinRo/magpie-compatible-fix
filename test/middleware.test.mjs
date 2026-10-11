@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { onRequest } from "../haiku55.middleware.js";
+import { onRequest } from "../opendesign-compatible-fix.middleware.js";
 
 function run(body, protocol = "anthropic", options = {}) {
   const ctx = { protocol, options, model: body?.model, reject(status, message) { return { rejected: true, status, message }; } };

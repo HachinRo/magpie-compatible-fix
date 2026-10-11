@@ -8,7 +8,7 @@ the working tree. No change was made to the Magpie binary or its configuration.
 
 ## Local checks
 
-- `node --check haiku55.middleware.js`: passed.
+- `node --check opendesign-compatible-fix.middleware.js`: passed.
 - `node --test test/*.test.mjs`: **31 passed, 0 failed** — model matching,
   the Responses `reasoning` -> `output_config` rewrite, effort mapping and
   override precedence, disabled mode, sampling removal, the tool-search

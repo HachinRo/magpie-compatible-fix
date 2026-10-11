@@ -72,12 +72,12 @@ export function onRequest(body, ctx) {
 
   const mode = options.mode === undefined ? "adaptive" : options.mode;
   if (haiku && mode !== "adaptive" && mode !== "disabled") {
-    return ctx.reject(400, "haiku55-thinking: mode must be adaptive or disabled");
+    return ctx.reject(400, "magpie-opendesign-compatible-fix: mode must be adaptive or disabled");
   }
   const configured = options.effort === undefined ? undefined : effort(options.effort);
   const fallback = options.defaultEffort === undefined ? "medium" : effort(options.defaultEffort);
   if (haiku && ((options.effort !== undefined && configured === undefined) || !fallback || fallback === "none")) {
-    return ctx.reject(400, "haiku55-thinking: invalid effort/defaultEffort option");
+    return ctx.reject(400, "magpie-opendesign-compatible-fix: invalid effort/defaultEffort option");
   }
 
   const thinking = object(body.thinking) ? body.thinking : {};

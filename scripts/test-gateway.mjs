@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const bin = process.env.MAGPIE_BIN;
 if (!bin) throw new Error("Set MAGPIE_BIN to a Magpie CLI executable first.");
-const root = await mkdtemp(join(tmpdir(), "magpie-haiku55-test-"));
+const root = await mkdtemp(join(tmpdir(), "magpie-opendesign-fix-test-"));
 const config = join(root, "config");
 await mkdir(join(config, "magpie"), { recursive: true });
 const captured = [];
