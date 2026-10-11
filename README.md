@@ -1,5 +1,53 @@
 # Magpie Haiku 5.5 Thinking
 
+Magpie gateway middleware for Claude Haiku 5.5 on Open Design and for Codex's
+client tool-search history.
+
+**Fixed (2026-10-11):** the relay refuses any OpenAI `reasoning` object and any
+Anthropic `thinking` block but accepts `output_config.effort`. The middleware
+rewrites the Responses request to ask with `output_config`, so thinking is
+preserved instead of turned off. It also rewrites Codex's client
+`tool_search_call` / `tool_search_output` history, which the relay
+mis-serializes during compaction. See
+[the fix and its boundary](./OPENDESIGN-THINKING-BLOCKER.md).
+
+## Install
+
+```sh
+magpie plugin add github:ezdemo/magpie-haiku55-thinking
+```
+
+The Anthropic `/v1/messages` and Chat `/v1/chat/completions` clients still run
+with thinking off: Magpie rebuilds those requests and drops a client's
+`output_config` before the relay, so middleware cannot carry thinking there.
+Set `{"mode":"disabled"}` to force thinking off everywhere (the previous
+workaround); the default `adaptive` mode preserves thinking on the Responses
+path.
+
+### Options
+
+```json
+{
+  "mode": "adaptive",
+  "defaultEffort": "medium",
+  "removeSampling": true,
+  "toolSearchHistory": true,
+  "models": []
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `mode` | `adaptive` (default) or `disabled` |
+| `effort` | optional; forces the effort |
+| `defaultEffort` | effort when the client asks none; default `medium` |
+| `removeSampling` | default `true`; drop `temperature`, `top_p`, `top_k` |
+| `toolSearchHistory` | default `true`; rewrite Codex client tool-search history |
+| `models` | extra full model ids to match |
+
+See [VALIDATION.md](./VALIDATION.md) for the dated test record.
+
+
 为 Claude Haiku 5.5 修正思考参数的 Magpie **网关中间件插件**。零依赖，无需构建，支持直接从 GitHub 安装。只匹配 Haiku 5.5，包括 OpenDesign 实际使用的 `claude-haiku-5.5`、标准名称 `claude-haiku-5-5` 以及带 provider 前缀的名称。
 
 **当前尚未完成 OpenDesign 的“保留思考、自动转换”修复。** 入口规范化已实现，但独立直连 OpenDesign 的三种接口开启思考仍返回 400；关闭思考的兼容测试不能作为此目标的验收。详见 [独立复现及阻塞说明](./OPENDESIGN-THINKING-BLOCKER.md)。
