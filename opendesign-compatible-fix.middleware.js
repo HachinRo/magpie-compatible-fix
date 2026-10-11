@@ -30,6 +30,82 @@ function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// DeepSeek sometimes writes <||DSML||...> with two bars. Magpie's Chat
+// reader starts only on <tool_call>, and only when <|DSML| follows it in the
+// same buffered delta. This scan keeps a split tag until it is complete, then
+// emits that exact pair once.
+function dsmlState(ctx) {
+  const state = object(ctx) && object(ctx.state) ? ctx.state : null;
+  if (!state) return { pending: "", opened: false, hold: "" };
+  if (!object(state.dsml)) state.dsml = { pending: "", opened: false, hold: "" };
+  return state.dsml;
+}
+function isBar(ch) { return ch === "|" || ch === "｜"; }
+function isSpace(ch) { return ch === " " || ch === "\n" || ch === "\r" || ch === "\t"; }
+function normalizeDsml(text, state) {
+  if (typeof text !== "string") return text;
+  const source = state.pending + text;
+  let out = "", i = 0;
+  state.pending = "";
+  while (i < source.length) {
+    if (source[i] !== "<") { out += source[i]; i += 1; continue; }
+    let j = i + 1, close = false;
+    if (source[j] === "/") { close = true; j += 1; }
+    while (isSpace(source[j])) j += 1;
+    let k = j, bars = false;
+    while (isBar(source[k])) { bars = true; k += 1; }
+    if (!bars && source.startsWith("<tool_call>", i)) { out += "<tool_call>"; i += 11; continue; }
+    if (!bars || source.slice(k, k + 4) !== "DSML") {
+      const partial = source.slice(i);
+      const maybe = partial.length < 24 && ("<tool_call>".startsWith(partial) || /^<\/?\s*[|｜]*$/.test(partial) || /^<\/?\s*[|｜]+\s*(?:D|DS|DSM|DSML)?$/.test(partial) || /^<\/?\s*[|｜]+DSML$/.test(partial));
+      if (maybe) { state.pending = partial; break; }
+      out += source[i]; i += 1; continue;
+    }
+    let endAt = k + 4;
+    while (isBar(source[endAt])) endAt += 1;
+    while (isSpace(source[endAt])) endAt += 1;
+    if (endAt >= source.length) { state.pending = source.slice(i); break; }
+    out += (close ? "</|DSML|" : "<|DSML|");
+    i = endAt;
+  }
+  return out;
+}
+function toolCallEvent(text) {
+  const calls = [];
+  const pattern = /<\|DSML\|invoke name="([^"]+)">([\s\S]*?)<\/\|DSML\|invoke>/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const args = {};
+    const params = /<\|DSML\|parameter name="([^"]+)"[^>]*>([\s\S]*?)<\/\|DSML\|parameter>/g;
+    let param;
+    while ((param = params.exec(match[2]))) args[param[1]] = param[2];
+    calls.push({ index: calls.length, id: "call_dsml_" + calls.length, type: "function", function: { name: match[1], arguments: JSON.stringify(args) } });
+  }
+  return calls;
+}
+function prepareDsml(text, state) {
+  let out = state.hold + normalizeDsml(text, state);
+  state.hold = "";
+  if (state.opened) out = state.block + out;
+  if (!state.opened && out.includes("<|DSML|")) state.opened = true;
+  if (state.opened && !/<\/\|DSML\|(?:function|tool)_calls>/.test(out)) { state.block = out; return { content: "", calls: [] }; }
+  state.block = "";
+  return { content: "", calls: toolCallEvent(out) };
+}
+function foldChat(body) {
+  if (!object(body) || !Array.isArray(body.choices)) return false;
+  const state = { pending: "", opened: false, hold: "", block: "" };
+  let changed = false;
+  for (const choice of body.choices) {
+    const message = object(choice) && object(choice.message) ? choice.message : null;
+    if (!message || typeof message.content !== "string") continue;
+    const prepared = prepareDsml(message.content, state); const folded = prepared.content; if (prepared.calls.length) { message.tool_calls = prepared.calls; choice.finish_reason = "tool_calls"; }
+    state.hold = "";
+    if (folded !== message.content) { message.content = folded; changed = true; }
+  }
+  return changed;
+}
+
 function effort(value) {
   if (typeof value !== "string") return undefined;
   const text = value.toLowerCase();
@@ -121,3 +197,25 @@ export function onRequest(body, ctx) {
   }
   return body;
 }
+
+export function onEvent(event, ctx) {
+  if (!object(event) || !Array.isArray(event.choices)) return event;
+  const state = dsmlState(ctx);
+  for (const choice of event.choices) {
+    const delta = object(choice) && object(choice.delta) ? choice.delta : null;
+    if (!delta || typeof delta.content !== "string") continue;
+    const prepared = prepareDsml(delta.content, state);
+    delta.content = prepared.content;
+    if (prepared.calls.length) {
+      delta.tool_calls = prepared.calls;
+      choice.finish_reason = "tool_calls";
+    }
+  }
+  return event;
+}
+
+export function onResponse(body) {
+  if (object(body)) foldChat(body);
+  return body;
+}
+// reload marker

@@ -61,3 +61,12 @@ tool-search history returned 400 `input[1].arguments`. This is the control.
 - The Anthropic and Chat client protocols cannot carry thinking to this relay
   from request middleware: Magpie rebuilds those bodies and drops a client's
   `output_config`. They run with thinking off instead of failing.
+
+
+## DeepSeek doubled-bar DSML — 2026-10-11
+
+Live gateway test on raw Magpie 0.1.1185, model pin `opendesign/deepseek-v4.1-flash: chat`:
+
+- One complete native `<｜DSML｜...>` chunk, with `<tool_call>` directly before it: HTTP 200 and a real `tool_calls` delta (`exec_command`, arguments `{"cmd":"echo ok"}`, finish `tool_calls`).
+- The same doubled-bar block split into 7-character SSE chunks: the reloaded middleware buffers every fragment, then emits one Chat `tool_calls` delta. HTTP 200; name `exec_command`; arguments `{"cmd":"echo ok"}`; finish `tool_calls`; no DSML text remains. All 32 plugin tests pass.
+- Temporary provider `dsmldouble` and the local mock servers on ports 51286-51290 were removed after the test. The Chat pin and provider sign-ins remain.
