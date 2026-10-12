@@ -30,6 +30,111 @@ function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// Keep raw text until a complete DSML block contains a real tool call.
+// Unknown models may use DSML; known non-DeepSeek models are left alone.
+function dsmlModel(body, ctx) {
+  const model = object(ctx) && typeof ctx.model === "string" && ctx.model
+    ? ctx.model : body.model;
+  return typeof model !== "string" || !model || /(?:^|\/)deepseek(?:[-_.]|$)/i.test(model);
+}
+function dsmlState(ctx, index) {
+  const state = object(ctx) && object(ctx.state) ? ctx.state : null;
+  if (!state) return { pending: "", nextIndex: 0, converted: false };
+  if (!object(state.dsml)) state.dsml = {};
+  if (!object(state.dsml[index])) state.dsml[index] = { pending: "", nextIndex: 0, converted: false };
+  return state.dsml[index];
+}
+function isBar(ch) { return ch === "|" || ch === "｜"; }
+function isSpace(ch) { return ch === " " || ch === "\n" || ch === "\r" || ch === "\t"; }
+function partialDsml(text) {
+  if ("<tool_call>".startsWith(text)) return true;
+  if (text.startsWith("<tool_call>")) text = text.slice(11);
+  if (!text) return true;
+  if (text[0] !== "<") return false;
+  let i = 1;
+  while (isSpace(text[i])) i += 1;
+  const first = i;
+  while (isBar(text[i])) i += 1;
+  if (i === text.length) return true;
+  if (i === first) return false;
+  for (const ch of "DSML") {
+    if (i === text.length) return true;
+    if (text[i++] !== ch) return false;
+  }
+  const second = i;
+  while (isBar(text[i])) i += 1;
+  if (i === text.length) return true;
+  if (i === second) return false;
+  while (isSpace(text[i])) i += 1;
+  const rest = text.slice(i);
+  return ["tool_calls>", "function_calls>"].some(tag => tag.startsWith(rest));
+}
+function toolCallEvent(text, state) {
+  const calls = [];
+  const pattern = /<\|DSML\|invoke name="([^"]+)">([\s\S]*?)<\/\|DSML\|invoke>/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const args = {};
+    const params = /<\|DSML\|parameter name="([^"]+)"[^>]*>([\s\S]*?)<\/\|DSML\|parameter>/g;
+    let param;
+    while ((param = params.exec(match[2]))) args[param[1]] = param[2];
+    const index = state.nextIndex++;
+    calls.push({ index, id: "call_dsml_" + index, type: "function", function: { name: match[1], arguments: JSON.stringify(args) } });
+  }
+  return calls;
+}
+function prepareDsml(text, state, final) {
+  const source = state.pending + text;
+  state.pending = "";
+  let content = "", cursor = 0;
+  const calls = [];
+  while (cursor < source.length) {
+    const start = source.indexOf("<", cursor);
+    if (start < 0) { content += source.slice(cursor); break; }
+    content += source.slice(cursor, start);
+    const rest = source.slice(start);
+    const opening = /^(?:<tool_call>)?<\s*[|｜]+DSML[|｜]+\s*(?:tool|function)_calls>/.exec(rest);
+    if (opening) {
+      const closing = /<\/\s*[|｜]+DSML[|｜]+\s*(?:tool|function)_calls>/.exec(rest.slice(opening[0].length));
+      if (!closing) {
+        if (final) content += rest;
+        else state.pending = rest;
+        break;
+      }
+      const end = opening[0].length + closing.index + closing[0].length;
+      const raw = rest.slice(0, end);
+      const normalized = raw.replace(/<(\/?)\s*[|｜]+DSML[|｜]+\s*/g, "<$1|DSML|");
+      const parsed = toolCallEvent(normalized, state);
+      if (parsed.length) {
+        calls.push(...parsed);
+        state.converted = true;
+      } else content += raw;
+      cursor = start + end;
+    } else if (!final && partialDsml(rest)) {
+      state.pending = rest;
+      break;
+    } else {
+      content += "<";
+      cursor = start + 1;
+    }
+  }
+  return { content, calls };
+}
+function foldChat(body) {
+  if (!object(body) || !Array.isArray(body.choices)) return false;
+  let changed = false;
+  for (const choice of body.choices) {
+    const message = object(choice) && object(choice.message) ? choice.message : null;
+    if (!message || typeof message.content !== "string") continue;
+    const state = { pending: "", nextIndex: 0, converted: false };
+    const prepared = prepareDsml(message.content, state, true);
+    const folded = prepared.content;
+    if (prepared.calls.length) { message.tool_calls = (message.tool_calls || []).concat(prepared.calls); choice.finish_reason = "tool_calls"; }
+    if (folded !== message.content) { message.content = folded; changed = true; }
+  }
+  return changed;
+}
+
 function effort(value) {
   if (typeof value !== "string") return undefined;
   const text = value.toLowerCase();
@@ -119,5 +224,29 @@ export function onRequest(body, ctx) {
     delete body.top_p;
     delete body.top_k;
   }
+  return body;
+}
+
+export function onEvent(event, ctx) {
+  if (!object(event) || !Array.isArray(event.choices) || !dsmlModel(event, ctx)) return event;
+  for (let i = 0; i < event.choices.length; i += 1) {
+    const choice = event.choices[i];
+    const delta = object(choice) && object(choice.delta) ? choice.delta : null;
+    if (!delta) continue;
+    const state = dsmlState(ctx, choice.index === undefined ? i : choice.index);
+    const final = choice.finish_reason !== undefined && choice.finish_reason !== null;
+    const prepared = prepareDsml(typeof delta.content === "string" ? delta.content : "", state, final);
+    if (typeof delta.content === "string" || prepared.content) delta.content = prepared.content;
+    if (prepared.calls.length) {
+      delta.tool_calls = (delta.tool_calls || []).concat(prepared.calls);
+      choice.finish_reason = "tool_calls";
+    }
+    if (final && state.converted) choice.finish_reason = "tool_calls";
+  }
+  return event;
+}
+
+export function onResponse(body, ctx) {
+  if (object(body) && dsmlModel(body, ctx)) foldChat(body);
   return body;
 }

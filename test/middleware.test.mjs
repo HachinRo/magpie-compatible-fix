@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { onRequest } from "../opendesign-compatible-fix.middleware.js";
+import { onRequest, onEvent, onResponse } from "../opendesign-compatible-fix.middleware.js";
 
 function run(body, protocol = "anthropic", options = {}) {
   const ctx = { protocol, options, model: body?.model, reject(status, message) { return { rejected: true, status, message }; } };
@@ -182,4 +182,20 @@ test("package is middleware-only and ships the file it declares", async () => {
   assert.equal(pkg.exports, undefined);
   assert.equal(pkg.dependencies, undefined);
   assert.ok((await readFile(new URL(`../${pkg.magpie.middleware}`, import.meta.url), "utf8")).includes("export function onRequest"));
+});
+
+test("folds doubled DSML bars into a chat tool call", () => {
+  const bar = "｜";
+  const ctx = { state: {} };
+  const first = { choices: [{ delta: { content: "<" + bar + bar + "DSML" + bar + bar + "tool_calls><" + bar + bar + "DSML" + bar + bar + "invoke" } }] };
+  assert.equal(onEvent(first, ctx).choices[0].delta.content, "");
+  const second = { choices: [{ delta: { content: " name=\"exec_command\"><" + bar + bar + "DSML" + bar + bar + "parameter name=\"cmd\" string=\"true\">echo ok</" + bar + bar + "DSML" + bar + bar + "parameter></" + bar + bar + "DSML" + bar + bar + "invoke></" + bar + bar + "DSML" + bar + bar + "tool_calls>" } }] };
+  const event = onEvent(second, ctx);
+  assert.equal(event.choices[0].finish_reason, "tool_calls");
+  assert.equal(event.choices[0].delta.tool_calls[0].function.name, "exec_command");
+  assert.equal(event.choices[0].delta.tool_calls[0].function.arguments, JSON.stringify({ cmd: "echo ok" }));
+  const body = { choices: [{ message: { content: "<" + bar + bar + "DSML" + bar + bar + "tool_calls><" + bar + bar + "DSML" + bar + bar + "invoke name=\"exec_command\"><" + bar + bar + "DSML" + bar + bar + "parameter name=\"cmd\" string=\"true\">echo ok</" + bar + bar + "DSML" + bar + bar + "parameter></" + bar + bar + "DSML" + bar + bar + "invoke></" + bar + bar + "DSML" + bar + bar + "tool_calls>" } }] };
+  onResponse(body);
+  assert.equal(body.choices[0].message.tool_calls[0].function.name, "exec_command");
+  assert.equal(body.choices[0].message.tool_calls[0].function.arguments, JSON.stringify({ cmd: "echo ok" }));
 });

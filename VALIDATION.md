@@ -61,3 +61,43 @@ tool-search history returned 400 `input[1].arguments`. This is the control.
 - The Anthropic and Chat client protocols cannot carry thinking to this relay
   from request middleware: Magpie rebuilds those bodies and drops a client's
   `output_config`. They run with thinking off instead of failing.
+
+
+## DeepSeek doubled-bar DSML — 2026-10-11
+
+Live gateway test on raw Magpie 0.1.1185, model pin `opendesign/deepseek-v4.1-flash: chat`:
+
+- One complete native `<｜DSML｜...>` chunk, with `<tool_call>` directly before it: HTTP 200 and a real `tool_calls` delta (`exec_command`, arguments `{"cmd":"echo ok"}`, finish `tool_calls`).
+- The same doubled-bar block split into 7-character SSE chunks: the reloaded middleware buffers every fragment, then emits one Chat `tool_calls` delta. HTTP 200; name `exec_command`; arguments `{"cmd":"echo ok"}`; finish `tool_calls`; no DSML text remains. All 32 plugin tests pass.
+- Temporary provider `dsmldouble` and the local mock servers on ports 51286-51290 were removed after the test. The Chat pin and provider sign-ins remain.
+
+## DSML text preservation and Magpie 0.1.1211 retest — 2026-10-12
+
+Environment: macOS (Apple Silicon), Node.js v22.23.1, official Magpie
+**v0.1.1211** at `/Applications/magpie.app` (binary sha256
+`8139263454d8f7f27a26bf072826066c6ae69166f2eb37dd35b9a0d4038b19b0`). The app
+binary and production `settings.json`, `providers.json`, and `plugins.json`
+were not changed. All live checks used isolated `HOME`, `XDG_CONFIG_HOME`,
+`XDG_CACHE_HOME`, fake provider keys, and local mock upstreams.
+
+The DSML response parser now changes text only when a complete DSML block
+contains a tool invocation. Incomplete prefixes are buffered and released if
+they are not DSML or when the stream finishes. The hooks run for a known
+DeepSeek model or an unknown model, but a known non-DeepSeek model is left
+byte-identical even when its content contains DSML.
+
+Checks against the installed plugin:
+
+- `node --check` on the middleware, unit tests, and gateway script: passed.
+- `node --test test/*.test.mjs`: **41 passed, 0 failed**, including plain
+  non-streaming and streaming text, non-DeepSeek controls, whole and split
+  DSML chunks, mixed text, and incomplete blocks.
+- `MAGPIE_BIN=/path/to/magpie MAGPIE_NO_ACCOUNTS=1 node scripts/test-gateway.mjs`:
+  **16/16 passed**. Native Messages and Chat now assert the current
+  `thinking.type=disabled` behavior rather than the stale adaptive assertion.
+- Real isolated ON/OFF harness: **96 requests, 48 per state; all 48 plugin-ON
+  content checks passed**. All five original fixes still fail OFF and pass ON,
+  so none was dropped. Plugin-ON Chat controls return `OK` or the exact plain
+  split text instead of empty content.
+
+The plugin was left enabled. No optional live Open Design request was made.
