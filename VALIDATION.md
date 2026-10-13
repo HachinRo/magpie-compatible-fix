@@ -1,7 +1,12 @@
-# Validation — 2026-10-11
+# Validation
+
+Entries are dated historical records. The tool-search history rewrite in the
+older entries is superseded by the Magpie 0.1.1226 entry below.
+
+## Initial validation — 2026-10-11
 
 Environment: macOS (Apple Silicon), Node.js v22.23.1, the pristine official
-Magpie **v0.1.1185** (`/Applications/magpie.app`, binary sha256
+Magpie **v0.1.1185** (official app binary sha256
 `29d03009ea2a43417feb729be15a7db9383acc5c1cd9f7fed072b44140877696`), the
 `opencode-opendesign-auth` provider plugin, and this middleware installed from
 the working tree. No change was made to the Magpie binary or its configuration.
@@ -74,7 +79,7 @@ Live gateway test on raw Magpie 0.1.1185, model pin `opendesign/deepseek-v4.1-fl
 ## DSML text preservation and Magpie 0.1.1211 retest — 2026-10-12
 
 Environment: macOS (Apple Silicon), Node.js v22.23.1, official Magpie
-**v0.1.1211** at `/Applications/magpie.app` (binary sha256
+**v0.1.1211** (official app binary sha256
 `8139263454d8f7f27a26bf072826066c6ae69166f2eb37dd35b9a0d4038b19b0`). The app
 binary and production `settings.json`, `providers.json`, and `plugins.json`
 were not changed. All live checks used isolated `HOME`, `XDG_CONFIG_HOME`,
@@ -209,3 +214,49 @@ Validation:
 The official app and production Magpie settings are unchanged. The existing
 Haiku model-output metadata override remains 127999. The plugin stays enabled.
 No paid or real Open Design request was sent.
+
+## Native tool-search history on Magpie 0.1.1226 — 2026-10-13
+
+Independent captures on official Magpie **v0.1.1226**, Node.js v22.23.1,
+macOS (Apple Silicon), confirm native handling with the plugin **OFF**:
+
+| Client transport to Responses upstream | OFF | ON after removing the rewrite |
+| --- | --- | --- |
+| Responses | 6/6 HTTP 200 | 6/6 HTTP 200 |
+| Codex Responses alias | 6/6 HTTP 200 | 6/6 HTTP 200 |
+| Messages-to-Responses | 6/6 HTTP 200 | 6/6 HTTP 200 |
+
+Each transport tests GPT-6 Luna, Haiku 5.5, and DeepSeek v4.1 Flash with
+streaming both off and on. Client Responses search items become a
+`function_call` / `function_call_output` pair before reaching the relay,
+with the call ID and decoded arguments preserved. Native Magpie describes
+the discovered tools in the output text. Messages tool-use/result blocks
+become the equivalent Responses pair with the original result string.
+
+The middleware's search conversion and option, and its four unit tests,
+are removed. The output-token clamp retains its independent provider-prefix
+scope, including exclusions for bare and `codex/` model IDs. Haiku thinking,
+sampling removal, token limits, and DeepSeek DSML repair remain enabled.
+Users on older Magpie should retain plugin commit **`0ce4f44`**.
+
+Validation:
+
+- `node --check`: **8 files passed**.
+- `node --test test/*.test.mjs`: **83 passed, 0 failed**.
+- Packaged gateway checks with `MAGPIE_NO_ACCOUNTS=1`: **80 passed** in
+  Magpie's moejs engine.
+- Full ON/OFF harness: **1356 requests, 678 per state**;
+  **678/678 ON checks passed** and every request reached the mock upstream.
+- Search guard: **18 OFF and 18 ON cases passed**, explicitly asserting
+  HTTP 200, native function-call content, and identical OFF/ON history.
+- Token guard: **618 ON cases passed**; OFF retained 160 expected limit
+  errors and 458 accepted controls. All 364 non-Haiku pass-through cases
+  retained equal OFF/ON token and thinking fields.
+- Other OFF failures remain reproducible: 22 thinking requests and six
+  sampling requests returned HTTP 400; five DSML controls returned HTTP 200
+  without the required native tool calls. Their corresponding ON checks pass.
+
+All checks use disposable configuration, fake keys, and local mock upstreams.
+The official app and production settings are unchanged. These results verify
+the real Magpie gateway transports, without claiming a new vendor-endpoint
+test or a direct test of Magpie's internal compaction-summary request.

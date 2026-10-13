@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { mock, history, dsml, plainSplit, incompleteDsml } from "./fixtures.mjs";
+import { mock, history, messageHistory, dsml, plainSplit, incompleteDsml } from "./fixtures.mjs";
 
 const bin = process.env.MAGPIE_BIN || join(homedir(), ".local/bin/magpie");
 const plugin = process.env.MAGPIE_PLUGIN || join(homedir(), ".config/magpie/plugins/node_modules/magpie-opendesign-compatible-fix");
@@ -70,7 +70,12 @@ for (const stream of [false, true]) {
   for (const type of ["enabled", "adaptive"]) add(`messages-${type}-${stream}`, "/v1/messages", "relay/claude-haiku-5.5", { messages: user, max_tokens: 1024, thinking: { type, budget_tokens: 1024 }, stream });
   add(`chat-thinking-${stream}`, "/v1/chat/completions", "relay/claude-haiku-5.5", { messages: user, reasoning_effort: "high", stream });
   add(`native-messages-${stream}`, "/v1/messages", "native/claude-haiku-5.5", { messages: user, max_tokens: 1024, thinking: { type: "enabled", budget_tokens: 1024 }, stream });
-  for (const model of ["gpt-6-luna", "claude-haiku-5.5", "deepseek-v4.1-flash"]) add(`search-${model}-${stream}`, "/v1/responses", `history/${model}`, { input: history, stream });
+  for (const model of ["gpt-6-luna", "claude-haiku-5.5", "deepseek-v4.1-flash"]) {
+    add(`search-${model}-${stream}`, "/v1/responses", `history/${model}`, { input: history, stream }, "search");
+    add(`search-codex-${model}-${stream}`, "/backend-api/codex/responses", `history/${model}`, { input: history, stream }, "search");
+    add(`search-messages-${model}-${stream}`, "/v1/messages", `history/${model}`,
+      { messages: messageHistory, max_tokens: 1024, stream }, "search");
+  }
   for (const field of ["temperature", "top_p", "top_k"]) add(`sampling-${field}-${stream}`, "/v1/responses", "sampling/claude-haiku-5.5", { input: "Reply OK", [field]: field === "top_k" ? 10 : 0.8, stream });
   add(`dsml-whole-${stream}`, "/v1/chat/completions", "dsml/deepseek-v4.1-flash", { messages: user, stream }, "tool");
   add(`plain-chat-${stream}`, "/v1/chat/completions", "dsml/deepseek-v4.1-flash", { messages: [{ role: "user", content: "plain" }], stream });
@@ -121,6 +126,27 @@ function chatText(text, stream) {
   if (!stream) return JSON.parse(text).choices?.[0]?.message?.content;
   return text.split("\n").filter(line => line.startsWith("data: {"))
     .map(line => JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || "").join("");
+}
+function searchProjection(result) {
+  return result.upstream.map(c => ({
+    path: c.path, items: c.body.input?.filter(i => ["function_call", "function_call_output"].includes(i.type)),
+  }));
+}
+function validSearch(captured, path) {
+  return captured.length > 0 && captured.every(c => {
+    const input = c.body.input;
+    if (c.status !== 200 || !c.path.endsWith("/responses") || !Array.isArray(input) ||
+        input.some(i => /^tool_search_(call|output)$/.test(i.type))) return false;
+    const call = input.find(i => i.type === "function_call" && i.name === "tool_search");
+    const output = input.find(i => i.type === "function_call_output");
+    try {
+      assert.deepEqual(JSON.parse(call?.arguments), history[1].arguments);
+      return call?.call_id === "call_search" && output?.call_id === call.call_id &&
+        typeof call.arguments === "string" && typeof output.output === "string" &&
+        output.output === (path === "/v1/messages" ? JSON.stringify(history[2].tools)
+          : "These tools are now available to call: exec_command");
+    } catch { return false; }
+  });
 }
 try {
   const models = ["claude-haiku-5.5", "claude-sonnet-5.5", "gpt-6-luna", "deepseek-v4.1-flash"];
@@ -175,7 +201,8 @@ try {
         captures.slice(before).every(c => ["max_tokens", "max_output_tokens", "max_completion_tokens"]
           .every(k => c.body[k] === undefined || c.body[k] ===
             (enabled && fixture.tokenLimit !== undefined ? Math.min(requestedLimit, fixture.tokenLimit - 1) : requestedLimit)));
-      const valid = response.status === 200 && tokenSafe && tokenExact && exactText && (fixture.expect === "tool" ? tool
+      const searchValid = fixture.expect !== "search" || validSearch(captures.slice(before), fixture.path);
+      const valid = response.status === 200 && tokenSafe && tokenExact && exactText && searchValid && (fixture.expect === "tool" ? tool
         : fixture.expect === "literal" ? !/"name"\s*:\s*"exec_command"/.test(text)
         : fixture.expect === "thinking" ? thinking : text.includes("OK"));
       const result = { ...fixture, enabled, status: response.status, valid, tool, thinking, upstream: captures.slice(before), response: text };
@@ -204,6 +231,15 @@ try {
       .filter(k => k in c.body).map(k => [k, c.body[k]])),
   }));
   const offById = new Map(results.filter(r => !r.enabled).map(r => [r.id, r]));
+  for (const result of results.filter(r => r.expect === "search")) {
+    assert.equal(result.status, 200, `Native search history: ${result.id}, enabled=${result.enabled}`);
+    assert.ok(result.valid, `Native search history content: ${result.id}, enabled=${result.enabled}`);
+    if (result.enabled) {
+      const off = offById.get(result.id);
+      assert.equal(result.status, off.status, `Search OFF/ON status changed: ${result.id}`);
+      assert.deepEqual(searchProjection(result), searchProjection(off), `Search OFF/ON history changed: ${result.id}`);
+    }
+  }
   for (const result of results.filter(r => r.enabled && r.expect === "tokens" && r.tokenLimit === undefined)) {
     const off = offById.get(result.id);
     assert.equal(result.status, off.status, `Non-Haiku OFF/ON status changed: ${result.id}`);

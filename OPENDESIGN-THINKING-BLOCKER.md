@@ -37,16 +37,15 @@ given back into that field.
 
 ## Codex tool-search history
 
-Compaction drops the `tool_search` declaration and leaves `tool_search_call` /
-`tool_search_output` items. The relay mis-serializes their `arguments` object
-and answers `Invalid type for 'input[1].arguments': expected an object, but got
-a string instead`. The middleware rewrites those items (client execution only)
-as the `function_call` / `function_call_output` pair the relay reads.
+Magpie >=0.1.1226 converts client `tool_search_call` / `tool_search_output`
+history into relay-compatible `function_call` / `function_call_output` pairs.
+The plugin no longer rewrites this history. Users on older Magpie should keep
+the plugin version from commit `0ce4f44`.
 
 ## Boundary
 
 The middleware runs on the request the agent sends. Magpie's own
 `compaction_trigger` summary turn is made by `s.serve`, which does not pass
-through gateway middleware, so a compaction summary that carries this history
-is still made by Open Design upstream and can still fail; Magpie falls back to
-its local summary. A normal turn that carries the history is repaired.
+through gateway middleware, so this plugin cannot fix Haiku thinking or
+output limits on that internal summary request. Native tool-search history
+handling belongs to Magpie; these checks cover client gateway transports.

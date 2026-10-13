@@ -88,46 +88,6 @@ test("operator override wins over the client's effort", () => {
   assert.equal(run(responses(), "responses", { defaultEffort: "xhigh" }).output_config.effort, "xhigh");
 });
 
-// ---- Codex tool-search history ----------------------------------------------
-const HISTORY = [
-  { type: "tool_search_call", id: "tsc_1", call_id: "call_1", status: "completed", execution: "client", arguments: { query: "serena", limit: 1 } },
-  { type: "tool_search_output", id: "tso_1", call_id: "call_1", status: "completed", execution: "client", tools: [{ type: "function", name: "initial_instructions" }] },
-];
-
-test("rewrites client tool-search history to function calls for a relay", () => {
-  const body = responses({ reasoning: { effort: "low" }, input: [{ type: "message", role: "user", content: "hi" }, ...structuredClone(HISTORY)] });
-  run(body, "responses");
-  assert.deepEqual(body.input[1], { type: "function_call", call_id: "call_1", name: "tool_search", arguments: '{"query":"serena","limit":1}' });
-  assert.deepEqual(body.input[2], { type: "function_call_output", call_id: "call_1", output: '[{"type":"function","name":"initial_instructions"}]' });
-});
-
-test("rewrites tool-search history for any relay model, not only Haiku", () => {
-  const body = { model: "opendesign/gpt-6-luna", input: [{ type: "message", role: "user", content: "hi" }, ...structuredClone(HISTORY)], reasoning: { effort: "low" } };
-  run(body, "responses");
-  assert.equal(body.input[1].type, "function_call");
-  assert.equal(body.input[2].type, "function_call_output");
-  assert.deepEqual(body.reasoning, { effort: "low" });
-});
-
-test("leaves server-executed search and the ChatGPT backend alone", () => {
-  const server = responses({ input: [{ type: "tool_search_call", execution: "server", call_id: "c", arguments: { query: "q" } }] });
-  run(server, "responses");
-  assert.equal(server.input[0].type, "tool_search_call");
-
-  for (const model of ["codex/gpt-6.1-sol", "gpt-6.1-sol"]) {
-    const native = { model, input: structuredClone(HISTORY), reasoning: { effort: "low" } };
-    const before = structuredClone(native);
-    run(native, "responses");
-    assert.deepEqual(native, before);
-  }
-});
-
-test("toolSearchHistory can be turned off", () => {
-  const body = responses({ input: structuredClone(HISTORY) });
-  run(body, "responses", { toolSearchHistory: false });
-  assert.equal(body.input[0].type, "tool_search_call");
-});
-
 // ---- other protocols keep working without thinking ---------------------------
 for (const protocol of ["anthropic", "chat"]) {
   test(`${protocol} turns thinking off instead of sending a refused block`, () => {

@@ -13,6 +13,12 @@ export const history = [
   { type: "tool_search_output", execution: "client", call_id: "call_search", tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }] },
   { role: "user", content: "Reply OK" },
 ];
+export const messageHistory = [
+  { role: "user", content: "Find a tool" },
+  { role: "assistant", content: [{ type: "tool_use", id: "call_search", name: "tool_search", input: history[1].arguments }] },
+  { role: "user", content: [{ type: "tool_result", tool_use_id: "call_search", content: JSON.stringify(history[2].tools) }] },
+  { role: "user", content: "Reply OK" },
+];
 
 export function mock(captured) {
   return createServer(async (req, res) => {

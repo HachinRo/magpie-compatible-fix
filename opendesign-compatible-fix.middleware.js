@@ -1,9 +1,8 @@
 // Runs in Magpie's moejs engine: no dependencies, Node APIs, fetch, or timers.
 //
-// Two known Open Design relay failures are repaired here, in the gateway
-// middleware, without touching Magpie:
+// Open Design relay compatibility fixes run in gateway middleware.
 //
-// 1. Haiku 5.5 thinking. The relay rejects any explicit `thinking` block
+// Haiku 5.5 thinking: the relay rejects any explicit `thinking` block
 //    ("thinking.type.enabled is not supported for this model") and refuses a
 //    translated `reasoning` object the same way, but it accepts
 //    `output_config.effort` and thinks from it. On the Responses path Magpie
@@ -11,19 +10,11 @@
 //    output_config and thinking is preserved. The Anthropic and Chat paths are
 //    rebuilt by Magpie, which drops output_config before the relay, so those
 //    keep working with thinking off.
-//
-// 2. Codex's client tool-search history. Compaction drops the tool_search
-//    declaration and leaves tool_search_call / tool_search_output items whose
-//    arguments the relay mis-serializes ("Invalid type for 'input[1].arguments':
-//    expected an object, but got a string instead"). They are rewritten as the
-//    function call and result the relay reads.
 const MODEL = /(?:^|\/)(?:anthropic\.)?(?:claude[-_.])?haiku[-_.]?5[-_.]5(?:-\d{8})?(?:@[-\w.]+)?$/i;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-// A vendor that reads Codex's client tool search natively is left alone: the
-// ChatGPT backend is reached by a codex-namespaced or bare model id, while a
-// provider-namespaced one is a relay that may not read it.
-function nativeSearch(model) {
-  return model.indexOf("/") < 0 || /^codex\//i.test(model);
+// Output-token limits apply to provider-prefixed relay IDs.
+function relayModel(model) {
+  return model.indexOf("/") >= 0 && !/^codex\//i.test(model);
 }
 
 function object(value) {
@@ -35,7 +26,7 @@ function tokenLimit(value) {
 }
 
 function clampTokens(body, model, options, ctx) {
-  if (nativeSearch(model)) return;
+  if (!relayModel(model)) return;
   const limit = options.maxOutputTokens === undefined ? 128000 : options.maxOutputTokens;
   const overrides = options.maxOutputTokensByModel === undefined ? {} : options.maxOutputTokensByModel;
   if (!tokenLimit(limit) || !object(overrides) || Object.keys(overrides).some(key => !tokenLimit(overrides[key]))) {
@@ -170,28 +161,6 @@ function effort(value) {
   return EFFORTS.indexOf(text) >= 0 ? text : undefined;
 }
 
-// searchItems rewrites Codex's client tool_search_call and tool_search_output
-// history as the function call and result the relay reads. A server-run search
-// is left as it came; nothing is offered for the history alone.
-function searchItems(input) {
-  if (!Array.isArray(input)) return false;
-  let changed = false;
-  for (let i = 0; i < input.length; i += 1) {
-    const item = input[i];
-    if (!object(item) || item.execution !== "client") continue;
-    if (item.type === "tool_search_call") {
-      const args = object(item.arguments) ? JSON.stringify(item.arguments) : String(item.arguments ?? "");
-      input[i] = { type: "function_call", call_id: item.call_id, name: "tool_search", arguments: args };
-      changed = true;
-    } else if (item.type === "tool_search_output") {
-      const output = JSON.stringify(Array.isArray(item.tools) ? item.tools : []);
-      input[i] = { type: "function_call_output", call_id: item.call_id, output };
-      changed = true;
-    }
-  }
-  return changed;
-}
-
 export function onRequest(body, ctx) {
   if (!object(body)) return body;
   const options = object(ctx.options) ? ctx.options : {};
@@ -236,7 +205,6 @@ export function onRequest(body, ctx) {
       if (off) delete body.output_config;
       else body.output_config = { ...output, effort: selected };
     }
-    if (options.toolSearchHistory !== false && !nativeSearch(model)) searchItems(body.input);
   } else if (haiku) {
     // Magpie rebuilds these requests itself and drops a client's output_config,
     // so thinking cannot reach the relay; keep them working without it.

@@ -1,7 +1,7 @@
 {
   "name": "magpie-opendesign-compatible-fix",
   "version": "0.1.0",
-  "description": "Magpie gateway middleware compatibility fix for Open Design (Haiku 5.5 thinking) and Codex tool-search history",
+  "description": "Magpie gateway middleware compatibility fixes for Open Design Haiku 5.5 thinking, output limits, sampling, and DeepSeek DSML tools",
   "type": "module",
   "files": ["opendesign-compatible-fix.middleware.js", "README.md", "VALIDATION.md", "OPENDESIGN-THINKING-BLOCKER.md", "LICENSE"],
   "license": "MIT",

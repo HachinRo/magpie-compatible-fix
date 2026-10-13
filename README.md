@@ -1,15 +1,21 @@
 # Magpie OpenDesign Compatible Fix
 
-Magpie gateway middleware that keeps Claude Haiku 5.5 working on Open Design
-and repairs Codex's client tool-search history.
+Magpie gateway middleware that keeps Claude Haiku 5.5 working on Open Design,
+limits its output tokens, removes unsupported sampling, and repairs DeepSeek
+DSML tool calls.
 
 **Fixed (2026-10-11):** the relay refuses any OpenAI `reasoning` object and any
 Anthropic `thinking` block but accepts `output_config.effort`. The middleware
 rewrites the Responses request to ask with `output_config`, so thinking is
-preserved instead of turned off. It also rewrites Codex's client
-`tool_search_call` / `tool_search_output` history, which the relay
-mis-serializes during compaction. See
+preserved instead of turned off. See
 [the fix and its boundary](./OPENDESIGN-THINKING-BLOCKER.md).
+
+**Magpie >=0.1.1226** handles client `tool_search_call` / `tool_search_output`
+history natively. This plugin no longer rewrites that history or exposes a
+history-rewrite option. Users on older Magpie should keep the plugin version
+from commit **`0ce4f44`**. The regression harness checks HTTP 200 and identical
+OFF/ON function-call history on Responses, the Codex Responses alias, and
+Messages-to-Responses, for streaming and non-streaming requests.
 
 ## Install
 
@@ -31,7 +37,6 @@ path.
   "mode": "adaptive",
   "defaultEffort": "medium",
   "removeSampling": true,
-  "toolSearchHistory": true,
   "models": []
 }
 ```
@@ -42,7 +47,6 @@ path.
 | `effort` | optional; forces the effort |
 | `defaultEffort` | effort when the client asks none; default `medium` |
 | `removeSampling` | default `true`; drop `temperature`, `top_p`, `top_k` |
-| `toolSearchHistory` | default `true`; rewrite Codex client tool-search history |
 | `models` | extra full model ids to match |
 
 See [VALIDATION.md](./VALIDATION.md) for the dated test record.
@@ -84,7 +88,9 @@ magpie plugin options magpie-opendesign-compatible-fix '{"mode":"disabled"}'
 {"mode":"disabled"}
 ```
 
-2026-10-11 在官方 raw Magpie v0.1.1185 上复测：插件 `adaptive`（默认）下，Responses 路径各档 effort 均返回 200 和思考项，Anthropic/Chat 路径返回 200（思考关闭），Codex 客户端 tool-search 历史 200；关闭插件时同一请求 502/400。完整验证结果见 [VALIDATION.md](./VALIDATION.md)。
+2026-10-11 在官方 raw Magpie v0.1.1185 上复测：插件 `adaptive`（默认）下，Responses 路径各档 effort 均返回 200 和思考项，Anthropic/Chat 路径返回 200（思考关闭）；关闭插件时思考请求失败。完整验证结果见 [VALIDATION.md](./VALIDATION.md)。
+
+Magpie **>=0.1.1226** 已原生处理客户端工具搜索历史，本插件不再改写这段历史。旧版 Magpie 用户应保留插件 commit **`0ce4f44`** 的版本。
 
 如需恢复保留思考的默认模式：
 
@@ -149,7 +155,7 @@ Anthropic 请求修正示例：
 | `maxOutputTokens` | 仅 Haiku 5.5 的默认输出 token 独占上限，默认 `128000`，实际最多 `127999`；必须是大于等于 2 的安全整数 |
 | `maxOutputTokensByModel` | 按**完整模型 ID**覆盖 Haiku 上限或为其他模型显式设置独占上限，例如 `{"opendesign/claude-haiku-5.5":128000,"opendesign/gpt-6-luna":64000}`；默认 `{}`，每个值必须是大于等于 2 的安全整数 |
 
-Token 限制与已有 tool-search relay 修复使用相同范围：带 provider 前缀的模型，排除 `codex/` 和裸模型 ID。
+Token 限制范围：带 provider 前缀的 relay 模型，排除 `codex/` 和裸模型 ID。
 默认上限只匹配已有 Haiku 5.5 正则，包括 `opendesign/claude-haiku-5.5`、`claude-haiku-5-5` 的 provider 前缀变体。
 其他模型（包括 Sonnet、GPT-6 Luna、DeepSeek）默认原样保留输出字段和 thinking 预算，即使数值大于 `128000`；改变 `maxOutputTokens` 不会为它们设置上限。
 只有 `maxOutputTokensByModel` 中的完整 ID 才会为其他模型启用限制；`models` 中的思考兼容别名不会自动启用 token 上限。
