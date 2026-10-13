@@ -11,18 +11,37 @@ function run(body, protocol = "responses", options = {}) {
 
 for (const protocol of ["responses", "anthropic", "chat"]) {
   for (const field of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
-    test(`${protocol} clamps ${field} at and above the exclusive relay limit`, () => {
+    test(`${protocol} clamps Haiku ${field} at and above the exclusive limit`, () => {
       for (const value of [128000, 132000, 200000]) {
-        const body = { model: "opendesign/gpt-6-luna", [field]: value };
-        assert.equal(run(body, protocol)[field], 127999);
-        assert.deepEqual(Object.keys(body), ["model", field]);
+        const body = { model: "opendesign/claude-haiku-5.5", [field]: value };
+        assert.equal(run(body, protocol, { mode: "disabled" })[field], 127999);
+        assert.deepEqual(Object.keys(body).filter(key => key !== "thinking"), ["model", field]);
+        if (protocol !== "responses") assert.deepEqual(body.thinking, { type: "disabled" });
       }
     });
     test(`${protocol} preserves smaller and invalid ${field} values`, () => {
       for (const value of [127999, 4096, 1, 0, -1, null, "200000", NaN, Infinity]) {
-        const body = { model: "opendesign/gpt-6-luna", [field]: value };
-        assert.deepEqual(run(body, protocol), body);
+        const body = { model: "opendesign/claude-haiku-5.5", [field]: value };
+        assert.deepEqual(run(body, protocol, { mode: "disabled" }), body);
         assert.ok(Object.is(body[field], value));
+      }
+    });
+    test(`${protocol} leaves other Open Design models' ${field} unchanged by default`, () => {
+      for (const model of ["opendesign/claude-sonnet-5.5", "opendesign/claude-sonnet-5-5", "opendesign/gpt-6-luna", "opendesign/deepseek-v4.1-flash"]) {
+        for (const value of [128000, 132000, 200000]) {
+          const body = { model, [field]: value, thinking: { type: "enabled", budget_tokens: 200000 } };
+          const before = structuredClone(body);
+          assert.deepEqual(run(body, protocol, { maxOutputTokens: 32000 }), before);
+        }
+      }
+    });
+    test(`${protocol} caps other models' ${field} only with exact full-model overrides`, () => {
+      for (const model of ["opendesign/claude-sonnet-5.5", "opendesign/gpt-6-luna", "opendesign/deepseek-v4.1-flash"]) {
+        const options = { maxOutputTokensByModel: { [model]: 64000 } };
+        assert.equal(run({ model, [field]: 200000 }, protocol, options)[field], 63999);
+        assert.equal(run({ model, [field]: 4096 }, protocol, options)[field], 4096);
+        const prefixed = { model: `other/${model}`, [field]: 200000 };
+        assert.deepEqual(run(prefixed, protocol, options), { model: `other/${model}`, [field]: 200000 });
       }
     });
   }
@@ -30,12 +49,12 @@ for (const protocol of ["responses", "anthropic", "chat"]) {
 
 test("clamps every supplied output alias without changing unrelated fields", () => {
   const body = {
-    model: "relay/gpt-6-luna", max_tokens: 132000,
+    model: "relay/claude-haiku-5.5", max_tokens: 132000,
     max_output_tokens: 200000, max_completion_tokens: 4096,
     messages: [{ role: "user", content: "hello" }], stream: true,
   };
   const messages = structuredClone(body.messages);
-  run(body);
+  run(body, "responses", { mode: "disabled" });
   assert.equal(body.max_tokens, 127999);
   assert.equal(body.max_output_tokens, 127999);
   assert.equal(body.max_completion_tokens, 4096);
@@ -60,7 +79,7 @@ test("caps thinking below the resulting max_tokens and never raises budgets", ()
       [4096, 1024, 4096, 1024],
     ]) {
       const body = { model: "relay/gpt-6-luna", max_tokens: max, thinking: { type: "enabled", budget_tokens: budget } };
-      run(body, protocol);
+      run(body, protocol, { maxOutputTokensByModel: { "relay/gpt-6-luna": 128000 } });
       assert.equal(body.max_tokens, expectedMax);
       assert.equal(body.thinking.budget_tokens, expectedBudget);
       assert.equal(body.thinking.type, "enabled");
@@ -70,7 +89,7 @@ test("caps thinking below the resulting max_tokens and never raises budgets", ()
 
 test("does not invent max_tokens to constrain a lone thinking budget", () => {
   const body = { model: "relay/gpt-6-luna", max_output_tokens: 200000, thinking: { budget_tokens: 200000 } };
-  run(body);
+  run(body, "responses", { maxOutputTokensByModel: { "relay/gpt-6-luna": 128000 } });
   assert.equal(body.max_output_tokens, 127999);
   assert.equal("max_tokens" in body, false);
   assert.equal(body.thinking.budget_tokens, 200000);
@@ -78,9 +97,28 @@ test("does not invent max_tokens to constrain a lone thinking budget", () => {
 
 test("uses configured default and exact full-model overrides", () => {
   const options = { maxOutputTokens: 64000, maxOutputTokensByModel: { "opendesign/gpt-6-luna": 32000, "relay/gpt-6-luna": 256000 } };
-  for (const [model, expected] of [["opendesign/gpt-6-luna", 31999], ["relay/gpt-6-luna", 199999], ["other/gpt-6-luna", 63999]]) {
+  for (const [model, expected] of [["opendesign/gpt-6-luna", 31999], ["relay/gpt-6-luna", 199999], ["other/gpt-6-luna", 199999], ["opendesign/claude-haiku-5.5", 63999]]) {
     assert.equal(run({ model, max_tokens: 199999 }, "chat", options).max_tokens, expected);
   }
+});
+
+test("reuses the Haiku regex for provider-prefixed spelling variants", () => {
+  for (const model of [
+    "opendesign/claude-haiku-5.5", "opendesign/claude-haiku-5-5",
+    "relay/anthropic.claude-haiku-5-5", "other/opendesign/claude-haiku-5.5",
+    "relay/claude-haiku-5-5-20261001", "relay/claude-haiku-5.5@preview",
+    "OPENDESIGN/CLAUDE-HAIKU-5.5",
+  ]) {
+    assert.equal(run({ model, max_output_tokens: 200000 }).max_output_tokens, 127999, model);
+  }
+});
+
+test("thinking aliases do not opt other models into a default token cap", () => {
+  const model = "relay/custom-haiku-alias";
+  assert.equal(run({ model, max_tokens: 200000 }, "responses", { models: [model] }).max_tokens, 200000);
+  assert.equal(run({ model, max_tokens: 200000 }, "responses", {
+    models: [model], maxOutputTokensByModel: { [model]: 128000 },
+  }).max_tokens, 127999);
 });
 
 test("skips bare and native Codex models and unknown protocols", () => {

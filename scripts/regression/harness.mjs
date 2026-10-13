@@ -60,7 +60,9 @@ async function start(enabled) {
 }
 const user = [{ role: "user", content: "Reply OK" }];
 const cases = [];
-function add(id, path, model, fields, expect = "ok", expectedText) { cases.push({ id, path, request: { model, ...fields }, expect, expectedText }); }
+function add(id, path, model, fields, expect = "ok", expectedText, tokenLimit) {
+  cases.push({ id, path, request: { model, ...fields }, expect, expectedText, tokenLimit });
+}
 for (const stream of [false, true]) {
   for (const effort of ["low", "medium", "high", "xhigh", "max"]) add(`responses-${effort}-${stream}`, "/v1/responses", "relay/claude-haiku-5.5", { input: "Reply OK", reasoning: { effort }, stream }, "thinking");
   add(`responses-thinking-${stream}`, "/v1/responses", "relay/claude-haiku-5.5", { input: "Reply OK", thinking: { type: "enabled", budget_tokens: 1024 }, stream }, "thinking");
@@ -87,21 +89,33 @@ for (const stream of [false, true]) {
     ["messages-native", "/v1/messages", "tokens-native", { messages: user }],
     ["chat", "/v1/chat/completions", "tokens-chat", { messages: user }],
   ]) {
-    for (const field of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
-      for (const value of [128000, 132000, 200000, 4096]) {
-        add(`tokens-${transport}-${field}-${value}-${stream}`, path, `${provider}/gpt-6-luna`,
-          { ...payload, [field]: value, stream }, "tokens");
+    for (const model of ["claude-haiku-5.5", "claude-sonnet-5.5", "gpt-6-luna", "deepseek-v4.1-flash"]) {
+      for (const field of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
+        for (const value of [128000, 132000, 200000, 4096]) {
+          add(`tokens-${transport}-${model}-${field}-${value}-${stream}`, path, `${provider}/${model}`,
+            { ...payload, [field]: value, stream }, "tokens", undefined,
+            model === "claude-haiku-5.5" ? 128000 : undefined);
+        }
       }
     }
     add(`tokens-${transport}-absent-${stream}`, path, `${provider}/claude-haiku-5.5`,
-      { ...payload, stream }, "tokens");
+      { ...payload, stream }, "tokens", undefined, 128000);
+    const overridden = provider.replace("tokens", "tokens-override");
+    for (const field of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
+      for (const value of [64000, 132000, 200000, 4096]) {
+        add(`tokens-override-${transport}-${field}-${value}-${stream}`, path, `${overridden}/gpt-6-luna`,
+          { ...payload, [field]: value, stream }, "tokens", undefined, 64000);
+      }
+    }
   }
   add(`tokens-budget-${stream}`, "/v1/messages", "tokens-native/gpt-6-luna",
     { messages: user, max_tokens: 200000, thinking: { type: "enabled", budget_tokens: 200000 }, stream }, "tokens");
+  add(`tokens-override-budget-${stream}`, "/v1/messages", "tokens-override-native/gpt-6-luna",
+    { messages: user, max_tokens: 200000, thinking: { type: "enabled", budget_tokens: 200000 }, stream }, "tokens", undefined, 64000);
   add(`tokens-all-${stream}`, "/v1/responses", "tokens/gpt-6-luna",
     { input: "Reply OK", max_tokens: 200000, max_output_tokens: 200000, max_completion_tokens: 200000, stream }, "tokens");
   add(`tokens-haiku-realshape-${stream}`, "/v1/messages", "tokens/claude-haiku-5.5",
-    { messages: user, max_tokens: 132000, thinking: { type: "enabled", budget_tokens: 16000 }, stream }, "tokens");
+    { messages: user, max_tokens: 132000, thinking: { type: "enabled", budget_tokens: 16000 }, stream }, "tokens", undefined, 128000);
 }
 function chatText(text, stream) {
   if (!stream) return JSON.parse(text).choices?.[0]?.message?.content;
@@ -109,13 +123,22 @@ function chatText(text, stream) {
     .map(line => JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || "").join("");
 }
 try {
-  const models = ["claude-haiku-5.5", "gpt-6-luna", "deepseek-v4.1-flash"];
+  const models = ["claude-haiku-5.5", "claude-sonnet-5.5", "gpt-6-luna", "deepseek-v4.1-flash"];
   for (const [id, route, native] of [["relay", "thinking", false], ["native", "thinking-native", true], ["history", "history", false], ["sampling", "sampling", false], ["dsml", "dsml", false],
-    ["tokens", "tokens", false], ["tokens-native", "tokens", true], ["tokens-chat", "tokens", false]]) {
-    const api = native ? "anthropic" : ["dsml", "tokens-chat"].includes(id) ? "url" : "responses";
+    ["tokens", "tokens", false], ["tokens-native", "tokens", true], ["tokens-chat", "tokens", false],
+    ["tokens-override", "tokens-override", false], ["tokens-override-native", "tokens-override", true],
+    ["tokens-override-chat", "tokens-override", false]]) {
+    const api = native ? "anthropic" : ["dsml", "tokens-chat", "tokens-override-chat"].includes(id) ? "url" : "responses";
     await command(["provider", "add", id, `${api}=http://127.0.0.1:${upstream.address().port}/${route}/v1`, `key=fixture-${id}-key`, `models=${models.join(",")}`]);
   }
   await command(["plugin", "add", plugin]);
+  const pluginsFile = join(config, "magpie/plugins.json");
+  const pluginSettings = JSON.parse(await readFile(pluginsFile, "utf8"));
+  const entry = pluginSettings.plugins.find(p => p.spec === plugin || p.name === "magpie-opendesign-compatible-fix");
+  assert.ok(entry, "Installed plugin entry missing");
+  entry.options = { maxOutputTokensByModel: Object.fromEntries(
+    ["tokens-override", "tokens-override-native", "tokens-override-chat"].map(provider => [`${provider}/gpt-6-luna`, 64000])) };
+  await writeFile(pluginsFile, JSON.stringify(pluginSettings));
   for (const provider of ["tokens", "tokens-native", "tokens-chat"]) {
     await command(["model", "output", `${provider}/claude-haiku-5.5`, "132000"]);
   }
@@ -125,9 +148,10 @@ try {
     throw error;
   }));
   settings.modelAPIs = {};
-  for (const provider of ["relay", "history", "sampling", "tokens"]) for (const model of models) settings.modelAPIs[`${provider}/${model}`] = "responses";
+  for (const provider of ["relay", "history", "sampling", "tokens", "tokens-override"]) for (const model of models) settings.modelAPIs[`${provider}/${model}`] = "responses";
   for (const model of models) settings.modelAPIs[`dsml/${model}`] = "chat";
   for (const model of models) settings.modelAPIs[`tokens-chat/${model}`] = "chat";
+  for (const model of models) settings.modelAPIs[`tokens-override-chat/${model}`] = "chat";
   await writeFile(settingsFile, JSON.stringify(settings));
   for (const enabled of [false, true]) {
     await start(enabled);
@@ -142,14 +166,15 @@ try {
       const thinking = text.includes('"reasoning"') && text.includes("fixture-signature");
       const exactText = fixture.expectedText === undefined ||
         response.status === 200 && chatText(text, fixture.request.stream) === fixture.expectedText;
-      const tokenSafe = fixture.expect !== "tokens" || captures.slice(before).every(c =>
-        ["max_tokens", "max_output_tokens", "max_completion_tokens"].every(k => !(c.body[k] >= 128000)) &&
+      const tokenSafe = fixture.expect !== "tokens" || !enabled || fixture.tokenLimit === undefined || captures.slice(before).every(c =>
+        ["max_tokens", "max_output_tokens", "max_completion_tokens"].every(k => !(c.body[k] >= fixture.tokenLimit)) &&
         !(c.body.thinking?.budget_tokens >= c.body.max_tokens));
       const requestedLimit = ["max_tokens", "max_output_tokens", "max_completion_tokens"]
         .map(k => fixture.request[k]).find(v => typeof v === "number");
-      const tokenExact = fixture.expect !== "tokens" || !enabled || requestedLimit === undefined ||
+      const tokenExact = fixture.expect !== "tokens" || requestedLimit === undefined ||
         captures.slice(before).every(c => ["max_tokens", "max_output_tokens", "max_completion_tokens"]
-          .every(k => c.body[k] === undefined || c.body[k] === Math.min(requestedLimit, 127999)));
+          .every(k => c.body[k] === undefined || c.body[k] ===
+            (enabled && fixture.tokenLimit !== undefined ? Math.min(requestedLimit, fixture.tokenLimit - 1) : requestedLimit)));
       const valid = response.status === 200 && tokenSafe && tokenExact && exactText && (fixture.expect === "tool" ? tool
         : fixture.expect === "literal" ? !/"name"\s*:\s*"exec_command"/.test(text)
         : fixture.expect === "thinking" ? thinking : text.includes("OK"));
@@ -165,10 +190,24 @@ try {
     onFailures, cases: results }, null, 2));
   assert.ok(results.every(r => r.upstream.length), "Every request must reach the mock upstream");
   for (const result of results.filter(r => !r.enabled && r.expect === "tokens")) {
-    const dropped = /^tokens-messages-relay-max_(output|completion)_tokens-/.test(result.id);
-    const oversized = ["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => result.request[k] >= 128000);
-    assert.equal(result.status, oversized && !dropped ? 400 : 200, `OFF token control: ${result.id}`);
-    if (result.status === 400) assert.ok(result.upstream.some(c => c.error?.includes("lower than 128000")), result.id);
+    const oversized = result.tokenLimit !== undefined && result.upstream.some(c =>
+      ["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => c.body[k] >= result.tokenLimit));
+    assert.equal(result.status, oversized ? 400 : 200, `OFF token control: ${result.id}`);
+    if (result.status === 400) assert.ok(result.upstream.some(c => c.error?.includes(`lower than ${result.tokenLimit}`)), result.id);
+    assert.ok(result.upstream.every(c => ["max_tokens", "max_output_tokens", "max_completion_tokens"]
+      .every(k => c.body[k] === undefined || c.body[k] ===
+        (["max_tokens", "max_output_tokens", "max_completion_tokens"].map(k => result.request[k]).find(v => typeof v === "number") ?? c.body[k]))),
+    `OFF token fields changed: ${result.id}`);
+  }
+  const tokenProjection = r => r.upstream.map(c => ({
+    path: c.path, ...Object.fromEntries(["max_tokens", "max_output_tokens", "max_completion_tokens", "thinking"]
+      .filter(k => k in c.body).map(k => [k, c.body[k]])),
+  }));
+  const offById = new Map(results.filter(r => !r.enabled).map(r => [r.id, r]));
+  for (const result of results.filter(r => r.enabled && r.expect === "tokens" && r.tokenLimit === undefined)) {
+    const off = offById.get(result.id);
+    assert.equal(result.status, off.status, `Non-Haiku OFF/ON status changed: ${result.id}`);
+    assert.deepEqual(tokenProjection(result), tokenProjection(off), `Non-Haiku OFF/ON token fields changed: ${result.id}`);
   }
   if (onFailures.length) {
     console.error(`Plugin ON content failures: ${onFailures.join(", ")}`);

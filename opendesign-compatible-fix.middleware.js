@@ -41,7 +41,9 @@ function clampTokens(body, model, options, ctx) {
   if (!tokenLimit(limit) || !object(overrides) || Object.keys(overrides).some(key => !tokenLimit(overrides[key]))) {
     return ctx.reject(400, "magpie-opendesign-compatible-fix: maxOutputTokens and maxOutputTokensByModel limits must be safe integers >= 2");
   }
-  const ceiling = (Object.prototype.hasOwnProperty.call(overrides, model) ? overrides[model] : limit) - 1;
+  const overridden = Object.prototype.hasOwnProperty.call(overrides, model);
+  if (!overridden && !MODEL.test(model)) return;
+  const ceiling = (overridden ? overrides[model] : limit) - 1;
   // The relay requires a value strictly below its limit. Preserve absent fields.
   for (const key of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
     if (typeof body[key] === "number" && Number.isFinite(body[key]) && body[key] > ceiling) body[key] = ceiling;

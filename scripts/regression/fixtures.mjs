@@ -22,7 +22,7 @@ export function mock(captured) {
       const body = raw ? JSON.parse(raw) : {};
       if (req.url.endsWith("/models")) {
         res.setHeader("Content-Type", "application/json");
-        return res.end(JSON.stringify({ data: ["claude-haiku-5.5", "gpt-6-luna", "deepseek-v4.1-flash"].map(id => ({ id })) }));
+        return res.end(JSON.stringify({ data: ["claude-haiku-5.5", "claude-sonnet-5.5", "gpt-6-luna", "deepseek-v4.1-flash"].map(id => ({ id })) }));
       }
       const issue = req.url.split("/")[1];
       let error;
@@ -38,10 +38,12 @@ export function mock(captured) {
       if (issue === "sampling" && ["temperature", "top_p", "top_k"].some(k => k in body)) {
         error = "Unsupported sampling parameter for this model";
       }
-      if (issue === "tokens" && ["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => body[k] >= 128000)) {
-        error = "[code=upstream_error] The maximum tokens you requested exceeds the model limit of 128000. Try again with a maximum tokens value that is lower than 128000.";
+      const tokenLimit = issue === "tokens" && body.model === "claude-haiku-5.5" ? 128000
+        : issue === "tokens-override" && body.model === "gpt-6-luna" ? 64000 : undefined;
+      if (tokenLimit && ["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => body[k] >= tokenLimit)) {
+        error = `[code=upstream_error] The maximum tokens you requested exceeds the model limit of ${tokenLimit}. Try again with a maximum tokens value that is lower than ${tokenLimit}.`;
       }
-      if (!error && issue === "tokens" && body.thinking?.budget_tokens >= body.max_tokens) {
+      if (!error && tokenLimit && body.thinking?.budget_tokens >= body.max_tokens) {
         error = "thinking.budget_tokens must be lower than max_tokens";
       }
       captured.push({ path: req.url, body, status: error ? 400 : 200, error: error ?? null });

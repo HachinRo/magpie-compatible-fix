@@ -159,3 +159,53 @@ Internal requests that bypass middleware still require this metadata bound;
 arbitrary explicit oversized values in such requests are outside hook scope.
 
 The plugin remains enabled. No paid or real Open Design request was sent.
+
+## Haiku-only default output-token limit - 2026-10-13
+
+This entry supersedes the default-cap scope in the earlier exclusive-limit
+entry. The default `maxOutputTokens` limit now applies only to provider-prefixed
+Haiku 5.5 IDs matched by the existing `MODEL` regex. It accepts
+`opendesign/claude-haiku-5.5`, `claude-haiku-5-5` with a provider prefix,
+and the existing nested prefixes, dated variants, and suffixes.
+The limit remains exclusive: default 128000 means a ceiling of 127999.
+
+Other models, including Open Design Sonnet, GPT-6 Luna, and DeepSeek v4.1
+Flash, preserve their output-token fields and thinking budgets by default,
+even at 200000. Changing `maxOutputTokens` changes only the Haiku default.
+An exact full-model `maxOutputTokensByModel` entry enables a cap for another
+model or overrides Haiku's limit. Thinking aliases in `models` do not enable
+a default token cap. Bare IDs and native `codex/` IDs retain their exclusion.
+Invalid limit configuration still returns 400 before request mutation.
+
+Environment: official Magpie **v0.1.1219**, Node.js v22.23.1, macOS
+(Apple Silicon). Tests use disposable settings, fake keys, and local mock
+upstreams. The token fixture enforces 128000 only for Haiku and 64000 for
+the explicit GPT override controls; it imposes no limit on other models.
+
+Validation:
+
+- `node --check`: **8 files passed**, including all middleware, tests,
+  gateway scripts, harness, and fixtures.
+- `node --test test/*.test.mjs`: **87 passed, 0 failed**. Tests cover all
+  three output aliases and protocols, Haiku regex variants, oversized
+  non-Haiku pass-through, exact overrides, and thinking-budget handling.
+- `MAGPIE_BIN=/path/to/magpie MAGPIE_NO_ACCOUNTS=1 node scripts/test-gateway.mjs`:
+  **80 local transport/content/control checks passed** in Magpie's moejs
+  engine, including 36 non-Haiku pass-through checks and 12 explicit
+  non-Haiku override checks.
+- Full ON/OFF harness: **1332 requests, 666 per state**; every request
+  reached the mock upstream and **666/666 ON checks passed**.
+- Token matrix: **618 cases per state**, all HTTP 200 with the plugin ON.
+  Haiku has 132 cases, exact GPT overrides have 122, and non-Haiku
+  pass-through has 364. OFF has 160 expected limit errors and 458 accepted
+  controls. Supported OFF token fields preserve their requested values;
+  Messages-to-Responses still drops unsupported output/completion aliases.
+- All **364 non-Haiku controls** explicitly assert equal OFF/ON statuses
+  and captured upstream token/thinking fields, including streaming,
+  all-alias, and thinking-budget controls.
+- All **48 earlier compatibility cases per state** remain in the harness;
+  all 48 ON thinking, tool-search, sampling, DSML, and plain-text cases pass.
+
+The official app and production Magpie settings are unchanged. The existing
+Haiku model-output metadata override remains 127999. The plugin stays enabled.
+No paid or real Open Design request was sent.

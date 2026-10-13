@@ -146,14 +146,17 @@ Anthropic 请求修正示例：
 | `defaultEffort` | 客户端未指定有效强度时的默认值；默认 `medium`，不接受关闭值 |
 | `removeSampling` | 默认 `true`；设为 `false` 保留采样字段 |
 | `models` | 额外匹配的**完整模型 ID**；用于明确指向 Haiku 5.5 的自定义别名 |
-| `maxOutputTokens` | Relay 输出 token 的独占上限，默认 `128000`，实际最多 `127999`；必须是大于等于 2 的安全整数 |
-| `maxOutputTokensByModel` | 按**完整模型 ID**覆盖独占上限，例如 `{"opendesign/claude-haiku-5.5":128000,"opendesign/gpt-6-luna":64000}`；默认 `{}`，每个值必须是大于等于 2 的安全整数 |
+| `maxOutputTokens` | 仅 Haiku 5.5 的默认输出 token 独占上限，默认 `128000`，实际最多 `127999`；必须是大于等于 2 的安全整数 |
+| `maxOutputTokensByModel` | 按**完整模型 ID**覆盖 Haiku 上限或为其他模型显式设置独占上限，例如 `{"opendesign/claude-haiku-5.5":128000,"opendesign/gpt-6-luna":64000}`；默认 `{}`，每个值必须是大于等于 2 的安全整数 |
 
 Token 限制与已有 tool-search relay 修复使用相同范围：带 provider 前缀的模型，排除 `codex/` 和裸模型 ID。
+默认上限只匹配已有 Haiku 5.5 正则，包括 `opendesign/claude-haiku-5.5`、`claude-haiku-5-5` 的 provider 前缀变体。
+其他模型（包括 Sonnet、GPT-6 Luna、DeepSeek）默认原样保留输出字段和 thinking 预算，即使数值大于 `128000`；改变 `maxOutputTokens` 不会为它们设置上限。
+只有 `maxOutputTokensByModel` 中的完整 ID 才会为其他模型启用限制；`models` 中的思考兼容别名不会自动启用 token 上限。
 它只降低已有的数值型 `max_tokens`、`max_output_tokens`、`max_completion_tokens`，不会添加缺失字段或提高较小值。
-已有 `thinking.budget_tokens` 不小于已有 `max_tokens` 时会降为 `max_tokens - 1`；Haiku 原有关闭思考策略仍然生效。
+对启用限制的模型，已有 `thinking.budget_tokens` 不小于已有 `max_tokens` 时会降为 `max_tokens - 1`；Haiku 原有关闭思考策略仍然生效。
 上限采用严格小于语义，因为 Open Design 的错误明确要求 “lower than 128000”。
-其他 relay 若支持更大输出，可使用完整模型 ID 覆盖；中间件无法识别 provider 的真实主机。
+Haiku relay 若支持更大输出，可使用完整模型 ID 覆盖；中间件无法识别 provider 的真实主机。
 路由组解析和 Magpie 内部绕过 gateway middleware 的请求仍受原有边界约束。
 如果 Magpie 在中间件之后为缺失字段生成默认预算，或由内部请求绕过中间件，则需要同时限制模型的输出 metadata：
 

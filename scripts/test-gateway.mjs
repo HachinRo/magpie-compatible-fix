@@ -25,7 +25,7 @@ const upstream = createServer(async (req, res) => {
       return;
     }
     captured.push({ path: req.url, body });
-    if (["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => body[k] >= 128000)) {
+    if (body.model === "claude-haiku-5.5" && ["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => body[k] >= 128000)) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: { type: "invalid_request_error", message: "The maximum tokens you requested exceeds the model limit of 128000. Try again with a maximum tokens value that is lower than 128000." } }));
       return;
@@ -98,8 +98,9 @@ const command = (args) => new Promise((resolvePromise, reject) => {
 let gateway;
 let gatewayLog = "";
 try {
-  await command(["provider", "add", "native", `anthropic=http://127.0.0.1:${upstreamPort}/v1`, "key=fixture-key", "models=claude-haiku-5.5"]);
-  await command(["provider", "add", "chat", `url=http://127.0.0.1:${upstreamPort}/v1`, "key=chat-fixture-key", "models=claude-haiku-5.5"]);
+  const models = "models=claude-haiku-5.5,claude-sonnet-5.5,gpt-6-luna,deepseek-v4.1-flash";
+  await command(["provider", "add", "native", `anthropic=http://127.0.0.1:${upstreamPort}/v1`, "key=fixture-key", models]);
+  await command(["provider", "add", "chat", `url=http://127.0.0.1:${upstreamPort}/v1`, "key=chat-fixture-key", models]);
   await command(["plugin", "add", plugin]);
   // Exercise the packaged middleware in moejs, not just its Node import.
   const pluginsFile = join(config, "magpie", "plugins.json");
@@ -156,14 +157,48 @@ try {
       }
     }
   }
+  for (const model of ["claude-sonnet-5.5", "gpt-6-luna", "deepseek-v4.1-flash"]) {
+    for (const provider of ["native", "chat"]) {
+      for (const stream of [false, true]) {
+        for (const [path, fields, field] of [
+          ["messages", { messages: user }, "max_tokens"],
+          ["chat/completions", { messages: user }, "max_completion_tokens"],
+          ["responses", { input: "Reply OK" }, "max_output_tokens"],
+        ]) {
+          const body = await send(path, `${provider}/${model}`, { ...fields, [field]: 200000, stream });
+          const limits = ["max_tokens", "max_output_tokens", "max_completion_tokens"].filter(k => k in body);
+          assert.ok(limits.length, "canonical token field disappeared");
+          for (const key of limits) assert.equal(body[key], 200000);
+          console.log(`PASS packaged moejs non-Haiku pass-through; ${path} -> ${provider}/${model}; stream=${stream}`);
+        }
+      }
+    }
+  }
   await writeFile(pluginsFile, JSON.stringify({ plugins: [{ spec: plugin, options: {
-    maxOutputTokens: 32000, maxOutputTokensByModel: { "native/claude-haiku-5.5": 64000 },
+    maxOutputTokens: 32000, maxOutputTokensByModel: {
+      "native/claude-haiku-5.5": 64000, "native/gpt-6-luna": 64000, "chat/gpt-6-luna": 48000,
+    },
   } }] }));
   await new Promise((r) => setTimeout(r, 1600));
   for (const [provider, expected] of [["native", 63999], ["chat", 31999]]) {
     const body = await send("messages", `${provider}/claude-haiku-5.5`, { messages: user, max_tokens: 132000 });
     assert.equal(body.max_tokens, expected);
     console.log(`PASS packaged moejs configured token limit; ${provider}=${expected}`);
+  }
+  for (const [provider, expected] of [["native", 63999], ["chat", 47999]]) {
+    for (const stream of [false, true]) {
+      for (const [path, fields, field] of [
+        ["messages", { messages: user }, "max_tokens"],
+        ["chat/completions", { messages: user }, "max_completion_tokens"],
+        ["responses", { input: "Reply OK" }, "max_output_tokens"],
+      ]) {
+        const body = await send(path, `${provider}/gpt-6-luna`, { ...fields, [field]: 200000, stream });
+        const limits = ["max_tokens", "max_output_tokens", "max_completion_tokens"].filter(k => k in body);
+        assert.ok(limits.length, "canonical token field disappeared");
+        for (const key of limits) assert.equal(body[key], expected);
+        console.log(`PASS packaged moejs non-Haiku explicit override; ${path} -> ${provider}=${expected}; stream=${stream}`);
+      }
+    }
   }
 
   // A converted request can gain a default after onRequest. The plugin must
@@ -221,7 +256,7 @@ try {
     liveKey = undefined;
   }
   assert.doesNotMatch(gatewayLog, /middleware.*(?:error|failed|panic)/i);
-  console.log("PASS packaged gateway: all 32 local transport/content checks");
+  console.log("PASS packaged gateway: all 80 local transport/content checks");
 } finally {
   if (gateway && gateway.exitCode === null) {
     const ended = new Promise(resolvePromise => gateway.once("close", resolvePromise));
