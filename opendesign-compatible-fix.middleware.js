@@ -30,6 +30,30 @@ function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function tokenLimit(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 2;
+}
+
+function clampTokens(body, model, options, ctx) {
+  if (nativeSearch(model)) return;
+  const limit = options.maxOutputTokens === undefined ? 128000 : options.maxOutputTokens;
+  const overrides = options.maxOutputTokensByModel === undefined ? {} : options.maxOutputTokensByModel;
+  if (!tokenLimit(limit) || !object(overrides) || Object.keys(overrides).some(key => !tokenLimit(overrides[key]))) {
+    return ctx.reject(400, "magpie-opendesign-compatible-fix: maxOutputTokens and maxOutputTokensByModel limits must be safe integers >= 2");
+  }
+  const ceiling = (Object.prototype.hasOwnProperty.call(overrides, model) ? overrides[model] : limit) - 1;
+  // The relay requires a value strictly below its limit. Preserve absent fields.
+  for (const key of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
+    if (typeof body[key] === "number" && Number.isFinite(body[key]) && body[key] > ceiling) body[key] = ceiling;
+  }
+  if (object(body.thinking) && typeof body.thinking.budget_tokens === "number" &&
+      Number.isFinite(body.thinking.budget_tokens) && typeof body.max_tokens === "number" &&
+      Number.isFinite(body.max_tokens) && body.max_tokens > 0 &&
+      body.thinking.budget_tokens >= body.max_tokens) {
+    body.thinking.budget_tokens = body.max_tokens - 1;
+  }
+}
+
 // Keep raw text until a complete DSML block contains a real tool call.
 // Unknown models may use DSML; known non-DeepSeek models are left alone.
 function dsmlModel(body, ctx) {
@@ -184,6 +208,8 @@ export function onRequest(body, ctx) {
   if (haiku && ((options.effort !== undefined && configured === undefined) || !fallback || fallback === "none")) {
     return ctx.reject(400, "magpie-opendesign-compatible-fix: invalid effort/defaultEffort option");
   }
+  const rejected = clampTokens(body, model, options, ctx);
+  if (rejected !== undefined) return rejected;
 
   const thinking = object(body.thinking) ? body.thinking : {};
   const output = object(body.output_config) ? body.output_config : {};

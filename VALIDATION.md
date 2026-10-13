@@ -101,3 +101,61 @@ Checks against the installed plugin:
   split text instead of empty content.
 
 The plugin was left enabled. No optional live Open Design request was made.
+
+## Exclusive output-token limits — 2026-10-13
+
+Environment: macOS (Apple Silicon), Node.js v22.23.1, official Magpie
+**v0.1.1219**, binary sha256
+`49036f01e8f90f84be8a581dba873e60d2cc8df8955f2da497bd2bb1715e8fcc`.
+The official app was not modified. Gateway tests use disposable `HOME`,
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, fake keys, and loopback mock upstreams.
+
+Official Magpie does not clamp explicit oversized output limits. With this
+middleware OFF, 128000, 132000, and 200000 reach the mock unchanged.
+Messages `max_tokens` becomes Responses `max_output_tokens`; Responses and
+native Chat/Message paths preserve their supported fields. The mock rejects
+values greater than or equal to 128000 using the observed Open Design error.
+Messages-to-Responses drops unsupported output/completion aliases, which
+is explicitly checked rather than counted as a clamp.
+
+The middleware now uses an exclusive `maxOutputTokens` limit (default
+128000, effective ceiling 127999) and an exact full-model
+`maxOutputTokensByModel` map. It caps all three existing numeric output
+aliases, preserves smaller values and absent fields, and keeps an existing
+thinking budget strictly below an existing `max_tokens`. Bare IDs and native
+`codex/` models remain outside this fix, matching the tool-search relay scope.
+Invalid limit options return 400 before changing the request.
+
+Validation:
+
+- Syntax checks: middleware, three unit-test files, gateway script, harness,
+  and fixtures all passed.
+- `node --test test/*.test.mjs`: **67 passed, 0 failed**.
+- `MAGPIE_BIN=/path/to/magpie MAGPIE_NO_ACCOUNTS=1 node scripts/test-gateway.mjs`:
+  **32 transport/content/control checks passed**, including the configurable
+  default and per-model override in Magpie's moejs engine.
+- Full installed-plugin ON/OFF harness: **368 requests, 184 per state**;
+  every request reached upstream and **184/184 ON checks passed**.
+- Token matrix: **136 cases per state**; OFF has 84 expected HTTP 400s
+  and 52 accepted controls, while ON has **136/136 HTTP 200s** with exact
+  capped values, intact responses, and valid thinking-budget relationships.
+- The other 48 cases per state retain all previous thinking, tool-search,
+  sampling, DSML, and ordinary-text checks.
+
+The Open Design provider plugin advertises Haiku 5.5 output as 132000.
+Production logs attribute three matching errors to Magpie's own client,
+model `opendesign/claude-haiku-5.5`, Messages-to-Responses, at
+19:00:28–19:00:31 on October 13 (Asia/Shanghai). Those logs retain no raw
+token fields; a historical value of 132000 is inferred from metadata, not
+presented as a captured request body.
+
+A separate packaged control proves that Magpie can generate `max_tokens`
+after middleware when converting an input without a token field. With model
+output metadata 132000 this fails even with the plugin ON; setting the model
+output metadata to 127999 makes the same request pass. The production
+one-model output override applies this bound to Haiku without adding any
+missing fields in middleware. The live model list reports 127999.
+Internal requests that bypass middleware still require this metadata bound;
+arbitrary explicit oversized values in such requests are outside hook scope.
+
+The plugin remains enabled. No paid or real Open Design request was sent.

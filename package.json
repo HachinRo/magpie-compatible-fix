@@ -9,12 +9,13 @@
   "repository": {"type": "git", "url": "git+https://github.com/HachinRo/magpie-opendesign-compatible-fix.git"},
   "magpie": {
     "middleware": "./opendesign-compatible-fix.middleware.js",
-    "options": {"mode": "adaptive", "defaultEffort": "medium", "removeSampling": true}
+    "options": {"mode": "adaptive", "defaultEffort": "medium", "removeSampling": true, "maxOutputTokens": 128000, "maxOutputTokensByModel": {}}
   },
   "scripts": {
     "check": "node --check opendesign-compatible-fix.middleware.js",
     "test": "node --test test/*.test.mjs",
     "test:gateway": "node scripts/test-gateway.mjs",
+    "test:regression": "node scripts/regression/harness.mjs",
     "test:thinking:live": "node scripts/test-thinking-live.mjs --live"
   },
   "engines": {"node": ">=20"}

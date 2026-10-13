@@ -25,6 +25,11 @@ const upstream = createServer(async (req, res) => {
       return;
     }
     captured.push({ path: req.url, body });
+    if (["max_tokens", "max_output_tokens", "max_completion_tokens"].some(k => body[k] >= 128000)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "invalid_request_error", message: "The maximum tokens you requested exceeds the model limit of 128000. Try again with a maximum tokens value that is lower than 128000." } }));
+      return;
+    }
     if (liveKey) {
       assert.equal(req.url, "/v1/chat/completions");
       const remote = await fetch("https://amr-link.open-design.ai/v1/chat/completions", {
@@ -136,6 +141,51 @@ try {
     console.log(`PASS packaged moejs Chat thinking disabled; stream=${stream}`);
   }
 
+  for (const provider of ["native", "chat"]) {
+    for (const stream of [false, true]) {
+      for (const [path, fields, field] of [
+        ["messages", { messages: user }, "max_tokens"],
+        ["chat/completions", { messages: user }, "max_completion_tokens"],
+        ["responses", { input: "Reply OK" }, "max_output_tokens"],
+      ]) {
+        const body = await send(path, `${provider}/claude-haiku-5.5`, { ...fields, [field]: 132000, stream });
+        const limits = ["max_tokens", "max_output_tokens", "max_completion_tokens"].filter(k => k in body);
+        assert.ok(limits.length, "canonical token field disappeared");
+        for (const key of limits) assert.equal(body[key], 127999);
+        console.log(`PASS packaged moejs token clamp; ${path} -> ${provider}; stream=${stream}`);
+      }
+    }
+  }
+  await writeFile(pluginsFile, JSON.stringify({ plugins: [{ spec: plugin, options: {
+    maxOutputTokens: 32000, maxOutputTokensByModel: { "native/claude-haiku-5.5": 64000 },
+  } }] }));
+  await new Promise((r) => setTimeout(r, 1600));
+  for (const [provider, expected] of [["native", 63999], ["chat", 31999]]) {
+    const body = await send("messages", `${provider}/claude-haiku-5.5`, { messages: user, max_tokens: 132000 });
+    assert.equal(body.max_tokens, expected);
+    console.log(`PASS packaged moejs configured token limit; ${provider}=${expected}`);
+  }
+
+  // A converted request can gain a default after onRequest. The plugin must
+  // not invent a missing client field; bound that default with model metadata.
+  await command(["model", "output", "native/claude-haiku-5.5", "132000"]);
+  await new Promise((r) => setTimeout(r, 1600));
+  captured.length = 0;
+  const implicit = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "native/claude-haiku-5.5", messages: user }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const implicitText = await implicit.text();
+  assert.equal(implicit.status, 400, implicitText);
+  assert.equal(captured.at(-1).body.max_tokens, 132000);
+  console.log("PASS generated-default control: absent client token field becomes upstream max_tokens=132000 after middleware");
+  await command(["model", "output", "native/claude-haiku-5.5", "127999"]);
+  await new Promise((r) => setTimeout(r, 1600));
+  const bounded = await send("chat/completions", "native/claude-haiku-5.5", { messages: user });
+  assert.equal(bounded.max_tokens, 127999);
+  console.log("PASS generated-default metadata repair: absent client token field becomes upstream max_tokens=127999");
+
   await writeFile(pluginsFile, JSON.stringify({ plugins: [{ spec: plugin, options: { mode: "disabled" } }] }));
   await new Promise((r) => setTimeout(r, 1600));
   for (const provider of ["native", "chat"]) {
@@ -171,7 +221,7 @@ try {
     liveKey = undefined;
   }
   assert.doesNotMatch(gatewayLog, /middleware.*(?:error|failed|panic)/i);
-  console.log("PASS packaged gateway: all 16 local transport/content checks");
+  console.log("PASS packaged gateway: all 32 local transport/content checks");
 } finally {
   if (gateway && gateway.exitCode === null) {
     const ended = new Promise(resolvePromise => gateway.once("close", resolvePromise));

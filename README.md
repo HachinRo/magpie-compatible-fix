@@ -118,7 +118,7 @@ Anthropic 请求修正示例：
 - 保留显式关闭思考的请求；`disabled` 配合 `xhigh/max` 时降到允许的 `high`。
 - 删除旧的 `thinking.budget_tokens`。固定 token 预算与 effort 没有精确对应关系，不根据预算猜测强度。
 - 默认移除 Haiku 5.5 不支持的 `temperature`、`top_p`、`top_k`。
-- 不改模型路由、`max_tokens`、工具、消息历史、签名、流式事件或响应。不会记录请求内容或读取登录凭据。
+- 不改模型路由、工具、消息历史或签名。中间件会限制 relay 请求中已有的输出 token 字段，并修复 DeepSeek DSML 工具调用；不会记录请求内容或读取登录凭据。
 
 中间件拿到的是**客户端协议的请求**。Anthropic 使用 `output_config.effort`，Chat 使用 `reasoning_effort`，Responses 使用 `reasoning.effort`。Chat 另外带上原生 `thinking` / `output_config` 扩展，以兼容支持透传的 relay。
 
@@ -133,6 +133,8 @@ Anthropic 请求修正示例：
   "mode": "adaptive",
   "defaultEffort": "medium",
   "removeSampling": true,
+  "maxOutputTokens": 128000,
+  "maxOutputTokensByModel": {},
   "models": []
 }
 ```
@@ -144,6 +146,22 @@ Anthropic 请求修正示例：
 | `defaultEffort` | 客户端未指定有效强度时的默认值；默认 `medium`，不接受关闭值 |
 | `removeSampling` | 默认 `true`；设为 `false` 保留采样字段 |
 | `models` | 额外匹配的**完整模型 ID**；用于明确指向 Haiku 5.5 的自定义别名 |
+| `maxOutputTokens` | Relay 输出 token 的独占上限，默认 `128000`，实际最多 `127999`；必须是大于等于 2 的安全整数 |
+| `maxOutputTokensByModel` | 按**完整模型 ID**覆盖独占上限，例如 `{"opendesign/claude-haiku-5.5":128000,"opendesign/gpt-6-luna":64000}`；默认 `{}`，每个值必须是大于等于 2 的安全整数 |
+
+Token 限制与已有 tool-search relay 修复使用相同范围：带 provider 前缀的模型，排除 `codex/` 和裸模型 ID。
+它只降低已有的数值型 `max_tokens`、`max_output_tokens`、`max_completion_tokens`，不会添加缺失字段或提高较小值。
+已有 `thinking.budget_tokens` 不小于已有 `max_tokens` 时会降为 `max_tokens - 1`；Haiku 原有关闭思考策略仍然生效。
+上限采用严格小于语义，因为 Open Design 的错误明确要求 “lower than 128000”。
+其他 relay 若支持更大输出，可使用完整模型 ID 覆盖；中间件无法识别 provider 的真实主机。
+路由组解析和 Magpie 内部绕过 gateway middleware 的请求仍受原有边界约束。
+如果 Magpie 在中间件之后为缺失字段生成默认预算，或由内部请求绕过中间件，则需要同时限制模型的输出 metadata：
+
+```sh
+magpie model output opendesign/claude-haiku-5.5 127999
+```
+
+恢复 vendor metadata 使用 `magpie model output opendesign/claude-haiku-5.5 --reset`。
 
 优先级：`mode: disabled` 强制临时兼容策略；否则 `effort` 配置 → 客户端本协议的 effort → 兼容字段中的 effort → `defaultEffort`。显式 `thinking.type: disabled` 保持关闭。非法插件 Options 会返回明确的 400。
 
@@ -157,7 +175,13 @@ npm test
 npm pack --dry-run
 ```
 
-没有需要安装的依赖。37 项测试覆盖模型匹配、五档强度、关闭值、配置覆盖、结构化输出、工具调用、签名、幂等性以及无关模型保持不变。
+没有需要安装的依赖。测试覆盖模型匹配、五档强度、关闭值、配置覆盖、结构化输出、工具调用、签名、幂等性、DSML 文本保留、输出 token 上限以及原生 Codex 保持不变。
+
+完整 ON/OFF 回归（默认测试已安装副本，可用 `MAGPIE_PLUGIN` 指定 checkout；仅使用隔离配置和本地 mock）：
+
+```sh
+MAGPIE_BIN=/path/to/magpie node scripts/regression/harness.mjs evidence/regression
+```
 
 用真实 Magpie CLI 测试 moejs 加载、流式返回、热更新及协议转换；测试创建独立的 `XDG_CONFIG_HOME` / `XDG_CACHE_HOME`，使用本地模拟服务和假 key，不修改日常 Magpie 配置：
 
