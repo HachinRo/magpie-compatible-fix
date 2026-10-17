@@ -1,22 +1,47 @@
 {
-  "name": "magpie-opendesign-compatible-fix",
-  "version": "0.1.0",
-  "description": "Magpie gateway middleware compatibility fixes for Open Design Haiku 5.5 thinking, output limits, sampling, and DeepSeek DSML tools",
+  "name": "magpie-compatible-fix",
+  "version": "0.2.0",
+  "description": "Magpie gateway middleware compatibility fixes for MultiAgentV2 agent_message, Open Design Haiku 5.5 thinking, output limits, sampling, and DeepSeek DSML tools",
   "type": "module",
-  "files": ["opendesign-compatible-fix.middleware.js", "README.md", "VALIDATION.md", "OPENDESIGN-THINKING-BLOCKER.md", "LICENSE"],
+  "files": [
+    "compatible-fix.middleware.js",
+    "README.md",
+    "VALIDATION.md",
+    "OPENDESIGN-THINKING-BLOCKER.md",
+    "LICENSE"
+  ],
   "license": "MIT",
-  "keywords": ["magpie", "magpie-plugin", "middleware", "claude", "haiku", "thinking"],
-  "repository": {"type": "git", "url": "git+https://github.com/HachinRo/magpie-opendesign-compatible-fix.git"},
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "middleware",
+    "claude",
+    "haiku",
+    "thinking",
+    "agent_message"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HachinRo/magpie-compatible-fix.git"
+  },
   "magpie": {
-    "middleware": "./opendesign-compatible-fix.middleware.js",
-    "options": {"mode": "adaptive", "defaultEffort": "medium", "removeSampling": true, "maxOutputTokens": 128000, "maxOutputTokensByModel": {}}
+    "middleware": "./compatible-fix.middleware.js",
+    "options": {
+      "mode": "adaptive",
+      "defaultEffort": "medium",
+      "removeSampling": true,
+      "maxOutputTokens": 128000,
+      "maxOutputTokensByModel": {}
+    }
   },
   "scripts": {
-    "check": "node --check opendesign-compatible-fix.middleware.js",
+    "check": "node --check compatible-fix.middleware.js",
     "test": "node --test test/*.test.mjs",
     "test:gateway": "node scripts/test-gateway.mjs",
     "test:regression": "node scripts/regression/harness.mjs",
     "test:thinking:live": "node scripts/test-thinking-live.mjs --live"
   },
-  "engines": {"node": ">=20"}
+  "engines": {
+    "node": ">=20"
+  }
 }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { onRequest, onEvent, onResponse } from "../opendesign-compatible-fix.middleware.js";
+import { onRequest, onEvent, onResponse } from "../compatible-fix.middleware.js";
 
 function run(body, protocol = "anthropic", options = {}) {
   const ctx = { protocol, options, model: body?.model, reject(status, message) { return { rejected: true, status, message }; } };
@@ -112,6 +112,51 @@ test("removes unsupported sampling, with opt-out", () => {
   assert.equal(keep.temperature, 0.8);
 });
 
+
+// ---- MultiAgentV2 plaintext agent_message ------------------------------------
+test("Responses rewrites plaintext agent_message to a user message for relay models", () => {
+  const body = responses({
+    input: [{
+      type: "agent_message",
+      author: "/root",
+      recipient: "/root/worker",
+      content: [{ type: "input_text", text: "Message Type: NEW_TASK\nReply only OK." }]
+    }]
+  });
+  run(body, "responses");
+  assert.deepEqual(body.input, [{
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: "Message Type: NEW_TASK\nReply only OK." }]
+  }]);
+});
+
+test("Responses leaves sealed agent_message items alone", () => {
+  const item = {
+    type: "agent_message",
+    author: "/root",
+    recipient: "/root/worker",
+    content: [
+      { type: "input_text", text: "Message Type: NEW_TASK\n" },
+      { type: "encrypted_content", encrypted_content: "gAAAAASealedTask==" }
+    ]
+  };
+  const body = responses({ input: [structuredClone(item)] });
+  run(body, "responses");
+  assert.deepEqual(body.input[0], item);
+});
+
+test("Responses leaves plaintext agent_message alone for non-relay models", () => {
+  const item = {
+    type: "agent_message",
+    author: "/root",
+    recipient: "/root/worker",
+    content: [{ type: "input_text", text: "hello" }]
+  };
+  const body = responses({ model: "gpt-6.1-sol", input: [structuredClone(item)], reasoning: { effort: "low" } });
+  run(body, "responses");
+  assert.deepEqual(body.input[0], item);
+});
 // ---- options and edges -------------------------------------------------------
 test("rejects invalid matching-model options", () => {
   for (const options of [{ mode: "oops" }, { effort: "impossible" }, { defaultEffort: "none" }, { defaultEffort: 20 }]) {

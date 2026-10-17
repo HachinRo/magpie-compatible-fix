@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { onRequest } from "../opendesign-compatible-fix.middleware.js";
+import { onRequest } from "../compatible-fix.middleware.js";
 
 function run(body, protocol = "responses", options = {}) {
   return onRequest(body, {

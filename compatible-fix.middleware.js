@@ -1,6 +1,6 @@
 // Runs in Magpie's moejs engine: no dependencies, Node APIs, fetch, or timers.
 //
-// Open Design relay compatibility fixes run in gateway middleware.
+// Magpie relay compatibility fixes run in gateway middleware.
 //
 // Haiku 5.5 thinking: the relay rejects any explicit `thinking` block
 //    ("thinking.type.enabled is not supported for this model") and refuses a
@@ -10,6 +10,12 @@
 //    output_config and thinking is preserved. The Anthropic and Chat paths are
 //    rebuilt by Magpie, which drops output_config before the relay, so those
 //    keep working with thinking off.
+//
+// MultiAgentV2 plaintext agent_message: Magpie converts these to user messages
+//    when translating protocols, but Responses passthrough leaves them intact.
+//    Open Design and other non-Codex relays refuse the raw item. Rewrite only
+//    plaintext agent_message items; leave encrypted/sealed tasks alone so
+//    Magpie's sealed-task gate still sees them.
 const MODEL = /(?:^|\/)(?:anthropic\.)?(?:claude[-_.])?haiku[-_.]?5[-_.]5(?:-\d{8})?(?:@[-\w.]+)?$/i;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // Output-token limits apply to provider-prefixed relay IDs.
@@ -30,7 +36,7 @@ function clampTokens(body, model, options, ctx) {
   const limit = options.maxOutputTokens === undefined ? 128000 : options.maxOutputTokens;
   const overrides = options.maxOutputTokensByModel === undefined ? {} : options.maxOutputTokensByModel;
   if (!tokenLimit(limit) || !object(overrides) || Object.keys(overrides).some(key => !tokenLimit(overrides[key]))) {
-    return ctx.reject(400, "magpie-opendesign-compatible-fix: maxOutputTokens and maxOutputTokensByModel limits must be safe integers >= 2");
+    return ctx.reject(400, "magpie-compatible-fix: maxOutputTokens and maxOutputTokensByModel limits must be safe integers >= 2");
   }
   const overridden = Object.prototype.hasOwnProperty.call(overrides, model);
   if (!overridden && !MODEL.test(model)) return;
@@ -161,6 +167,31 @@ function effort(value) {
   return EFFORTS.indexOf(text) >= 0 ? text : undefined;
 }
 
+function hasEncryptedContent(content) {
+  if (!Array.isArray(content)) return false;
+  for (let i = 0; i < content.length; i += 1) {
+    const part = content[i];
+    if (object(part) && typeof part.encrypted_content === "string" && part.encrypted_content) return true;
+  }
+  return false;
+}
+
+// Magpie's Responses passthrough does not flatten MultiAgentV2 agent_message
+// items the way its protocol translators do. Non-Codex relays refuse them.
+// Convert plaintext items only; sealed/encrypted tasks stay for Magpie's gate.
+function normalizePlainAgentMessages(body) {
+  if (!Array.isArray(body.input)) return;
+  for (let i = 0; i < body.input.length; i += 1) {
+    const item = body.input[i];
+    if (!object(item) || item.type !== "agent_message") continue;
+    if (hasEncryptedContent(item.content)) continue;
+    const next = { type: "message", role: "user" };
+    if ("content" in item) next.content = item.content;
+    if (typeof item.id === "string") next.id = item.id;
+    body.input[i] = next;
+  }
+}
+
 export function onRequest(body, ctx) {
   if (!object(body)) return body;
   const options = object(ctx.options) ? ctx.options : {};
@@ -172,12 +203,12 @@ export function onRequest(body, ctx) {
 
   const mode = options.mode === undefined ? "adaptive" : options.mode;
   if (haiku && mode !== "adaptive" && mode !== "disabled") {
-    return ctx.reject(400, "magpie-opendesign-compatible-fix: mode must be adaptive or disabled");
+    return ctx.reject(400, "magpie-compatible-fix: mode must be adaptive or disabled");
   }
   const configured = options.effort === undefined ? undefined : effort(options.effort);
   const fallback = options.defaultEffort === undefined ? "medium" : effort(options.defaultEffort);
   if (haiku && ((options.effort !== undefined && configured === undefined) || !fallback || fallback === "none")) {
-    return ctx.reject(400, "magpie-opendesign-compatible-fix: invalid effort/defaultEffort option");
+    return ctx.reject(400, "magpie-compatible-fix: invalid effort/defaultEffort option");
   }
   const rejected = clampTokens(body, model, options, ctx);
   if (rejected !== undefined) return rejected;
@@ -196,6 +227,8 @@ export function onRequest(body, ctx) {
   const off = mode === "disabled" || selected === "none" || thinking.type === "disabled";
 
   if (ctx.protocol === "responses") {
+    // Provider-prefixed non-Codex models take Magpie's Responses passthrough.
+    if (relayModel(model)) normalizePlainAgentMessages(body);
     if (haiku) {
       // delete the reasoning object before the relay reads it; it is what the
       // relay turns into the thinking block it refuses. Ask with output_config.

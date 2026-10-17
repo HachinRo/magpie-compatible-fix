@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { onEvent, onResponse } from "../opendesign-compatible-fix.middleware.js";
+import { onEvent, onResponse } from "../compatible-fix.middleware.js";
 
 const model = "relay/deepseek-v4.1-flash";
 const block = (bars = "\uff5c\uff5c", kind = "tool_calls") => {

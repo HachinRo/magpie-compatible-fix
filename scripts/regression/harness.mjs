@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { mock, history, messageHistory, dsml, plainSplit, incompleteDsml } from "./fixtures.mjs";
 
 const bin = process.env.MAGPIE_BIN || join(homedir(), ".local/bin/magpie");
-const plugin = process.env.MAGPIE_PLUGIN || join(homedir(), ".config/magpie/plugins/node_modules/magpie-opendesign-compatible-fix");
+const plugin = process.env.MAGPIE_PLUGIN || join(homedir(), ".config/magpie/plugins/node_modules/magpie-compatible-fix");
 const evidenceDir = resolve(process.argv[2] || "evidence/baseline");
 const root = await mkdtemp(join(tmpdir(), "magpie-regression-"));
 const config = join(root, "config");
@@ -44,7 +44,7 @@ async function stop() {
 }
 async function start(enabled) {
   await stop();
-  await command(["plugin", enabled ? "on" : "off", "magpie-opendesign-compatible-fix"]);
+  await command(["plugin", enabled ? "on" : "off", "magpie-compatible-fix"]);
   gateway = spawn(bin, ["serve"], { env, stdio: ["ignore", "pipe", "pipe"] });
   gateway.stdout.on("data", b => log += b);
   gateway.stderr.on("data", b => log += b);
@@ -160,7 +160,7 @@ try {
   await command(["plugin", "add", plugin]);
   const pluginsFile = join(config, "magpie/plugins.json");
   const pluginSettings = JSON.parse(await readFile(pluginsFile, "utf8"));
-  const entry = pluginSettings.plugins.find(p => p.spec === plugin || p.name === "magpie-opendesign-compatible-fix");
+  const entry = pluginSettings.plugins.find(p => p.spec === plugin || p.name === "magpie-compatible-fix");
   assert.ok(entry, "Installed plugin entry missing");
   entry.options = { maxOutputTokensByModel: Object.fromEntries(
     ["tokens-override", "tokens-override-native", "tokens-override-chat"].map(provider => [`${provider}/gpt-6-luna`, 64000])) };
@@ -213,7 +213,7 @@ try {
   const onFailures = results.filter(r => r.enabled && !r.valid).map(r => r.id);
   await writeFile(join(evidenceDir, "results.json"), JSON.stringify({ version: execFileSync("defaults", ["read", "/Applications/magpie.app/Contents/Info", "CFBundleShortVersionString"], { encoding: "utf8" }).trim(),
     binarySha256: createHash("sha256").update(await readFile(bin)).digest("hex"),
-    middlewareSha256: createHash("sha256").update(await readFile(join(plugin, "opendesign-compatible-fix.middleware.js"))).digest("hex"),
+    middlewareSha256: createHash("sha256").update(await readFile(join(plugin, "compatible-fix.middleware.js"))).digest("hex"),
     onFailures, cases: results }, null, 2));
   assert.ok(results.every(r => r.upstream.length), "Every request must reach the mock upstream");
   for (const result of results.filter(r => !r.enabled && r.expect === "tokens")) {

@@ -1,8 +1,15 @@
-# Magpie OpenDesign Compatible Fix
+# Magpie Compatible Fix
 
 Magpie gateway middleware that keeps Claude Haiku 5.5 working on Open Design,
-limits its output tokens, removes unsupported sampling, and repairs DeepSeek
-DSML tool calls.
+limits its output tokens, removes unsupported sampling, repairs DeepSeek
+DSML tool calls, and rewrites MultiAgentV2 plaintext `agent_message` items
+for Responses passthrough relays.
+
+**Fixed (2026-10-17):** Open Design refuses a Responses `agent_message` input
+item with HTTP 400 `upstream_error`. Magpie converts that item when translating
+protocols, but Responses passthrough leaves it intact. This middleware rewrites
+plaintext `agent_message` items to ordinary user messages and leaves encrypted
+sealed tasks alone for Magpie's sealed-task gate.
 
 **Fixed (2026-10-11):** the relay refuses any OpenAI `reasoning` object and any
 Anthropic `thinking` block but accepts `output_config.effort`. The middleware
@@ -20,7 +27,7 @@ Messages-to-Responses, for streaming and non-streaming requests.
 ## Install
 
 ```sh
-magpie plugin add github:HachinRo/magpie-opendesign-compatible-fix
+magpie plugin add github:HachinRo/magpie-compatible-fix
 ```
 
 The Anthropic `/v1/messages` and Chat `/v1/chat/completions` clients still run
@@ -66,7 +73,7 @@ Use "thinking.type.adaptive" and "output_config.effort" to control thinking beha
 **安装在 OpenDesign 所在的远端 Magpie。** 如果错误前面有 `Remote magpie:`，只安装在客户端不能保证远端转换后的参数正确。
 
 ```sh
-magpie plugin add github:HachinRo/magpie-opendesign-compatible-fix
+magpie plugin add github:HachinRo/magpie-compatible-fix
 ```
 
 2026-10-09 的实测发现：OpenDesign 的 `claude-haiku-5.5` 接口即使收到原生 `thinking: {"type":"adaptive"}` 和 `output_config.effort`，仍可能返回相同的 `enabled` 错误；Chat 的 `reasoning_effort` 还出现了 502。因此，本插件提供两种模式：
@@ -79,7 +86,7 @@ magpie plugin add github:HachinRo/magpie-opendesign-compatible-fix
 **仅在确实需要关闭思考时，可使用 `disabled`：**
 
 ```sh
-magpie plugin options magpie-opendesign-compatible-fix '{"mode":"disabled"}'
+magpie plugin options magpie-compatible-fix '{"mode":"disabled"}'
 ```
 
 如果终端对 JSON 引号的处理不同，也可以打开远端 Magpie 的「Plugins → Installed → 本插件 → Options」，保存：
@@ -95,7 +102,7 @@ Magpie **>=0.1.1226** 已原生处理客户端工具搜索历史，本插件不�
 如需恢复保留思考的默认模式：
 
 ```sh
-magpie plugin options magpie-opendesign-compatible-fix '{"mode":"adaptive"}'
+magpie plugin options magpie-compatible-fix '{"mode":"adaptive"}'
 ```
 
 ## 标准 adaptive 模式
