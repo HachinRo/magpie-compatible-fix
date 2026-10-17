@@ -14,8 +14,12 @@
 // MultiAgentV2 plaintext agent_message: Magpie converts these to user messages
 //    when translating protocols, but Responses passthrough leaves them intact.
 //    Open Design and other non-Codex relays refuse the raw item. Rewrite only
-//    plaintext agent_message items; leave encrypted/sealed tasks alone so
-//    Magpie's sealed-task gate still sees them.
+//    plaintext agent_message items.
+//
+// Sealed ChatGPT agent tasks: Magpie refuses them on non-ChatGPT models because
+//    only a ChatGPT account can open the ciphertext. A plugin cannot decrypt
+//    that payload, so remount sealed tasks onto a Codex/ChatGPT-readable model
+//    before Magpie's gate. Leave non-native encrypted parts alone.
 const MODEL = /(?:^|\/)(?:anthropic\.)?(?:claude[-_.])?haiku[-_.]?5[-_.]5(?:-\d{8})?(?:@[-\w.]+)?$/i;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // Output-token limits apply to provider-prefixed relay IDs.
@@ -176,9 +180,33 @@ function hasEncryptedContent(content) {
   return false;
 }
 
+// ChatGPT-native sealed payloads use Fernet-looking ciphertext (gAAAAA...).
+// Magpie's gate keys off that shape; a plain string in encrypted_content is not sealed.
+function hasNativeSealedContent(content) {
+  if (!Array.isArray(content)) return false;
+  for (let i = 0; i < content.length; i += 1) {
+    const part = content[i];
+    if (object(part) && typeof part.encrypted_content === "string" && part.encrypted_content.indexOf("gAAAAA") === 0) return true;
+  }
+  return false;
+}
+
+function sealedAgentTask(body) {
+  if (!Array.isArray(body.input)) return false;
+  for (let i = 0; i < body.input.length; i += 1) {
+    const item = body.input[i];
+    if (object(item) && item.type === "agent_message" && hasNativeSealedContent(item.content)) return true;
+  }
+  return false;
+}
+
+function codexReadableModel(model) {
+  return typeof model === "string" && (/^codex\//i.test(model) || /^gpt-/i.test(model) || /^o[0-9]/i.test(model));
+}
+
 // Magpie's Responses passthrough does not flatten MultiAgentV2 agent_message
 // items the way its protocol translators do. Non-Codex relays refuse them.
-// Convert plaintext items only; sealed/encrypted tasks stay for Magpie's gate.
+// Convert plaintext items only. Remount sealed ChatGPT tasks onto a Codex model.
 function normalizePlainAgentMessages(body) {
   if (!Array.isArray(body.input)) return;
   for (let i = 0; i < body.input.length; i += 1) {
@@ -190,6 +218,16 @@ function normalizePlainAgentMessages(body) {
     if (typeof item.id === "string") next.id = item.id;
     body.input[i] = next;
   }
+}
+
+function remountSealedAgentTasks(body, options) {
+  if (!sealedAgentTask(body)) return;
+  const current = typeof body.model === "string" ? body.model : "";
+  if (codexReadableModel(current)) return;
+  const configured = typeof options.sealedTaskModel === "string" ? options.sealedTaskModel.trim() : "";
+  const target = configured || "codex/gpt-6.1-sol";
+  if (!target || target === current) return;
+  body.model = target;
 }
 
 export function onRequest(body, ctx) {
@@ -228,8 +266,15 @@ export function onRequest(body, ctx) {
 
   if (ctx.protocol === "responses") {
     // Provider-prefixed non-Codex models take Magpie's Responses passthrough.
-    if (relayModel(model)) normalizePlainAgentMessages(body);
-    if (haiku) {
+    if (relayModel(model)) {
+      remountSealedAgentTasks(body, options);
+      // Remount may have moved a sealed task onto Codex; re-read the model.
+      const after = typeof body.model === "string" ? body.model : model;
+      if (relayModel(after)) normalizePlainAgentMessages(body);
+    }
+    const active = typeof body.model === "string" ? body.model : model;
+    const haikuNow = MODEL.test(active) || aliases.indexOf(active) >= 0;
+    if (haikuNow) {
       // delete the reasoning object before the relay reads it; it is what the
       // relay turns into the thinking block it refuses. Ask with output_config.
       delete body.reasoning;

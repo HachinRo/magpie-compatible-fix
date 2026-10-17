@@ -10,6 +10,8 @@ item with HTTP 400 `upstream_error`. Magpie converts that item when translating
 protocols, but Responses passthrough leaves it intact. This middleware rewrites
 plaintext `agent_message` items to ordinary user messages and leaves encrypted
 sealed tasks alone for Magpie's sealed-task gate.
+**Fixed (2026-10-17 evening):** sealed ChatGPT subagent tasks on Open Design Haiku were refused locally by Magpie. The plugin remounts those sealed tasks onto `codex/gpt-6.1-sol` (or `sealedTaskModel`) so Magpie's gate can forward them to a ChatGPT-readable account. Ciphertext is not decrypted.
+
 
 **Fixed (2026-10-11):** the relay refuses any OpenAI `reasoning` object and any
 Anthropic `thinking` block but accepts `output_config.effort`. The middleware
@@ -55,6 +57,7 @@ path.
 | `defaultEffort` | effort when the client asks none; default `medium` |
 | `removeSampling` | default `true`; drop `temperature`, `top_p`, `top_k` |
 | `models` | extra full model ids to match |
+| `sealedTaskModel` | model used when a ChatGPT-sealed subagent task arrives on a non-Codex model; default `codex/gpt-6.1-sol` |
 
 See [VALIDATION.md](./VALIDATION.md) for the dated test record.
 

@@ -131,7 +131,7 @@ test("Responses rewrites plaintext agent_message to a user message for relay mod
   }]);
 });
 
-test("Responses leaves sealed agent_message items alone", () => {
+test("Responses remounts sealed agent_message tasks onto a Codex model", () => {
   const item = {
     type: "agent_message",
     author: "/root",
@@ -143,6 +143,40 @@ test("Responses leaves sealed agent_message items alone", () => {
   };
   const body = responses({ input: [structuredClone(item)] });
   run(body, "responses");
+  assert.equal(body.model, "codex/gpt-6.1-sol");
+  assert.deepEqual(body.input[0], item);
+  assert.equal("output_config" in body, false);
+});
+
+test("Responses honors sealedTaskModel override", () => {
+  const item = {
+    type: "agent_message",
+    author: "/root",
+    recipient: "/root/worker",
+    content: [
+      { type: "input_text", text: "Message Type: NEW_TASK\n" },
+      { type: "encrypted_content", encrypted_content: "gAAAAASealedTask==" }
+    ]
+  };
+  const body = responses({ input: [structuredClone(item)] });
+  run(body, "responses", { sealedTaskModel: "codex/gpt-6-luna" });
+  assert.equal(body.model, "codex/gpt-6-luna");
+  assert.deepEqual(body.input[0], item);
+});
+
+test("Responses leaves non-native encrypted agent_message content alone", () => {
+  const item = {
+    type: "agent_message",
+    author: "/root",
+    recipient: "/root/worker",
+    content: [
+      { type: "input_text", text: "Payload:\n" },
+      { type: "encrypted_content", encrypted_content: "plain task" }
+    ]
+  };
+  const body = responses({ input: [structuredClone(item)] });
+  run(body, "responses");
+  assert.equal(body.model, "opendesign/claude-haiku-5.5");
   assert.deepEqual(body.input[0], item);
 });
 

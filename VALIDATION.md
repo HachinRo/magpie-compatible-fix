@@ -271,3 +271,9 @@ test or a direct test of Magpie's internal compaction-summary request.
   - identical user message control → HTTP 200
   - sealed `agent_message` → local HTTP 400 sealed-task rejection (unchanged)
 - Evidence: `/Users/sainthenry/Documents/ChatGPT/Computer use/outputs/magpie-compatible-fix-20261017/live-ab-after-fix.json`
+## 2026-10-17 sealed-task remount
+
+- Added Responses remount for ChatGPT-native sealed `agent_message` tasks (`encrypted_content` starting with `gAAAAA`) onto `codex/gpt-6.1-sol` by default, overridable with `sealedTaskModel`.
+- Ciphertext is not decrypted; Magpie's gate then forwards to a ChatGPT-readable account instead of rejecting locally.
+- Non-native encrypted parts and plaintext agent_message rewrite remain unchanged.
+- Unit tests: `npm test` 88/88 pass.

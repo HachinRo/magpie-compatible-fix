@@ -1,7 +1,7 @@
 {
   "name": "magpie-compatible-fix",
-  "version": "0.2.0",
-  "description": "Magpie gateway middleware compatibility fixes for MultiAgentV2 agent_message, Open Design Haiku 5.5 thinking, output limits, sampling, and DeepSeek DSML tools",
+  "version": "0.2.1",
+  "description": "Magpie gateway middleware compatibility fixes for MultiAgentV2 agent_message, sealed ChatGPT subagent tasks, Open Design Haiku 5.5 thinking, output limits, sampling, and DeepSeek DSML tools",
   "type": "module",
   "files": [
     "compatible-fix.middleware.js",
@@ -31,7 +31,8 @@
       "defaultEffort": "medium",
       "removeSampling": true,
       "maxOutputTokens": 128000,
-      "maxOutputTokensByModel": {}
+      "maxOutputTokensByModel": {},
+      "sealedTaskModel": "codex/gpt-6.1-sol"
     }
   },
   "scripts": {
