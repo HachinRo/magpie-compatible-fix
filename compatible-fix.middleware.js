@@ -20,6 +20,10 @@
 //    only a ChatGPT account can open the ciphertext. A plugin cannot decrypt
 //    that payload, so remount sealed tasks onto a Codex/ChatGPT-readable model
 //    before Magpie's gate. Leave non-native encrypted parts alone.
+//
+// Namespaced tools: Magpie's translator flattens namespace tools to
+//    namespace__name, but Responses passthrough leaves them intact. Open Design
+//    refuses the raw namespace tool. Flatten tools and historical calls here.
 const MODEL = /(?:^|\/)(?:anthropic\.)?(?:claude[-_.])?haiku[-_.]?5[-_.]5(?:-\d{8})?(?:@[-\w.]+)?$/i;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // Output-token limits apply to provider-prefixed relay IDs.
@@ -222,6 +226,38 @@ function normalizePlainAgentMessages(body) {
   }
 }
 
+function flattenNamespaceTools(body) {
+  if (Array.isArray(body.tools)) {
+    const flat = [];
+    for (let i = 0; i < body.tools.length; i += 1) {
+      const tool = body.tools[i];
+      if (!object(tool) || tool.type !== "namespace" || !Array.isArray(tool.tools)) {
+        flat.push(tool);
+        continue;
+      }
+      for (let j = 0; j < tool.tools.length; j += 1) {
+        const sub = tool.tools[j];
+        if (!object(sub) || sub.type !== "function" || typeof sub.name !== "string") continue;
+        const next = { ...sub, name: tool.name + "__" + sub.name };
+        if (typeof tool.description === "string" && tool.description) {
+          next.description = tool.description + "\n\n" + (sub.description || "");
+        }
+        flat.push(next);
+      }
+    }
+    body.tools = flat;
+  }
+  if (Array.isArray(body.input)) {
+    for (let i = 0; i < body.input.length; i += 1) {
+      const item = body.input[i];
+      if (!object(item) || (item.type !== "function_call" && item.type !== "custom_tool_call")) continue;
+      if (typeof item.namespace !== "string" || !item.namespace) continue;
+      item.name = item.namespace + "__" + item.name;
+      delete item.namespace;
+    }
+  }
+}
+
 function remountSealedAgentTasks(body, options) {
   if (!sealedAgentTask(body)) return;
   const current = typeof body.model === "string" ? body.model : "";
@@ -272,7 +308,10 @@ export function onRequest(body, ctx) {
       remountSealedAgentTasks(body, options);
       // Remount may have moved a sealed task onto Codex; re-read the model.
       const after = typeof body.model === "string" ? body.model : model;
-      if (relayModel(after)) normalizePlainAgentMessages(body);
+      if (relayModel(after)) {
+        flattenNamespaceTools(body);
+        normalizePlainAgentMessages(body);
+      }
     }
     const active = typeof body.model === "string" ? body.model : model;
     const haikuNow = MODEL.test(active) || aliases.indexOf(active) >= 0;

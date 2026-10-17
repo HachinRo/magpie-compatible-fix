@@ -195,6 +195,28 @@ test("Responses leaves plaintext agent_message alone for non-relay models", () =
   run(body, "responses");
   assert.deepEqual(body.input[0], item);
 });
+
+// ---- namespaced tools -------------------------------------------------------
+test("Responses flattens namespace tools and historical namespaced calls", () => {
+  const body = responses({
+    tools: [
+      { type: "function", name: "exec_command", parameters: { type: "object" } },
+      { type: "namespace", name: "mcp__codex_app", description: "Codex app", tools: [
+        { type: "function", name: "archive_worktree", description: "Archive", parameters: { type: "object" } }
+      ] }
+    ],
+    input: [
+      { type: "function_call", namespace: "mcp__codex_app", name: "archive_worktree", arguments: "{}", call_id: "call_1" }
+    ]
+  });
+  run(body, "responses");
+  assert.deepEqual(body.tools, [
+    { type: "function", name: "exec_command", parameters: { type: "object" } },
+    { type: "function", name: "mcp__codex_app__archive_worktree", description: "Codex app\n\nArchive", parameters: { type: "object" } }
+  ]);
+  assert.equal(body.input[0].name, "mcp__codex_app__archive_worktree");
+  assert.equal("namespace" in body.input[0], false);
+});
 // ---- options and edges -------------------------------------------------------
 test("rejects invalid matching-model options", () => {
   for (const options of [{ mode: "oops" }, { effort: "impossible" }, { defaultEffort: "none" }, { defaultEffort: 20 }]) {
