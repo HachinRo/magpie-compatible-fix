@@ -58,6 +58,7 @@ path.
 | `removeSampling` | default `true`; drop `temperature`, `top_p`, `top_k` |
 | `models` | extra full model ids to match |
 | `sealedTaskModel` | model used when a ChatGPT-sealed subagent task arrives on a non-Codex model; default `codex/gpt-6.1-sol` |
+| `maxToolBytes` | default `30000`; flatten small namespaces and skip an oversized optional namespace so Open Design accepts the tool payload |
 
 See [VALIDATION.md](./VALIDATION.md) for the dated test record.
 

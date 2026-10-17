@@ -277,3 +277,10 @@ test or a direct test of Magpie's internal compaction-summary request.
 - Ciphertext is not decrypted; Magpie's gate then forwards to a ChatGPT-readable account instead of rejecting locally.
 - Non-native encrypted parts and plaintext agent_message rewrite remain unchanged.
 - Unit tests: `npm test` 88/88 pass.
+## 2026-10-17 namespace flatten and tool cap
+
+- Reproduced real Haiku worker `upstream_error` with captured request: Open Design refused 3 `namespace` tools.
+- Flattened nested namespace functions to `namespace__name`, including historical namespaced calls.
+- Found a second failure at about 32 KB of tool JSON. Added `maxToolBytes` default 30000; small namespaces first, oversized optional namespace skipped.
+- Captured real failing request replayed through Magpie: HTTP 200, `response.completed`, expected text `REPLAY_OK_FINAL`.
+- Unit tests: 90/90 pass at `magpie-compatible-fix` 0.2.2.
