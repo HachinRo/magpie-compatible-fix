@@ -217,6 +217,23 @@ test("Responses flattens namespace tools and historical namespaced calls", () =>
   assert.equal(body.input[0].name, "mcp__codex_app__archive_worktree");
   assert.equal("namespace" in body.input[0], false);
 });
+
+test("Responses skips an oversized namespace instead of exceeding the tool budget", () => {
+  const huge = Array.from({ length: 20 }, (_, i) => ({
+    type: "function", name: `tool_${i}`, description: "x".repeat(2000), parameters: { type: "object" }
+  }));
+  const body = responses({
+    tools: [
+      { type: "function", name: "exec_command", parameters: { type: "object" } },
+      { type: "namespace", name: "huge", description: "huge", tools: huge },
+      { type: "namespace", name: "small", tools: [{ type: "function", name: "ping", parameters: { type: "object" } }] }
+    ]
+  });
+  run(body, "responses", { maxToolBytes: 5000 });
+  assert.equal(body.tools.some(t => t.name === "huge__tool_0"), false);
+  assert.equal(body.tools.some(t => t.name === "small__ping"), true);
+  assert.ok(JSON.stringify(body.tools).length <= 5000);
+});
 // ---- options and edges -------------------------------------------------------
 test("rejects invalid matching-model options", () => {
   for (const options of [{ mode: "oops" }, { effort: "impossible" }, { defaultEffort: "none" }, { defaultEffort: 20 }]) {

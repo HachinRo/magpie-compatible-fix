@@ -226,15 +226,19 @@ function normalizePlainAgentMessages(body) {
   }
 }
 
-function flattenNamespaceTools(body) {
+function flattenNamespaceTools(body, options) {
+  const budget = Number.isSafeInteger(options.maxToolBytes) && options.maxToolBytes >= 2
+    ? options.maxToolBytes : 30000;
   if (Array.isArray(body.tools)) {
-    const flat = [];
+    const base = [];
+    const namespaces = [];
     for (let i = 0; i < body.tools.length; i += 1) {
       const tool = body.tools[i];
       if (!object(tool) || tool.type !== "namespace" || !Array.isArray(tool.tools)) {
-        flat.push(tool);
+        base.push(tool);
         continue;
       }
+      const expanded = [];
       for (let j = 0; j < tool.tools.length; j += 1) {
         const sub = tool.tools[j];
         if (!object(sub) || sub.type !== "function" || typeof sub.name !== "string") continue;
@@ -242,8 +246,17 @@ function flattenNamespaceTools(body) {
         if (typeof tool.description === "string" && tool.description) {
           next.description = tool.description + "\n\n" + (sub.description || "");
         }
-        flat.push(next);
+        expanded.push(next);
       }
+      if (expanded.length) namespaces.push(expanded);
+    }
+    // Open Design refuses a tool payload above roughly 30 KB. Small namespace
+    // bundles go first; an oversized optional bundle is left out, never fatal.
+    namespaces.sort((a, b) => JSON.stringify(a).length - JSON.stringify(b).length);
+    const flat = base.slice();
+    for (let i = 0; i < namespaces.length; i += 1) {
+      const next = flat.concat(namespaces[i]);
+      if (JSON.stringify(next).length <= budget) flat.push(...namespaces[i]);
     }
     body.tools = flat;
   }
@@ -309,7 +322,7 @@ export function onRequest(body, ctx) {
       // Remount may have moved a sealed task onto Codex; re-read the model.
       const after = typeof body.model === "string" ? body.model : model;
       if (relayModel(after)) {
-        flattenNamespaceTools(body);
+        flattenNamespaceTools(body, options);
         normalizePlainAgentMessages(body);
       }
     }
