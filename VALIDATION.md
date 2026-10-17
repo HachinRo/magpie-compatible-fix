@@ -260,3 +260,14 @@ All checks use disposable configuration, fake keys, and local mock upstreams.
 The official app and production settings are unchanged. These results verify
 the real Magpie gateway transports, without claiming a new vendor-endpoint
 test or a direct test of Magpie's internal compaction-summary request.
+## 2026-10-17 agent_message Responses rewrite + rename
+
+- Renamed package/repo to `magpie-compatible-fix` (`HachinRo/magpie-compatible-fix`).
+- Added Responses passthrough rewrite: plaintext MultiAgentV2 `agent_message` → `message`/`role=user`.
+- Sealed/encrypted `agent_message` items are left alone for Magpie's sealed-task gate.
+- Unit tests: `npm test` 86/86 pass; `npm run check` pass.
+- Live Magpie 0.1.1278 after `magpie plugin rm` old + `magpie plugin add github:HachinRo/magpie-compatible-fix`:
+  - plaintext `agent_message` → HTTP 200 + `MAGPIE_DIAGNOSTIC_OK` + reasoning item
+  - identical user message control → HTTP 200
+  - sealed `agent_message` → local HTTP 400 sealed-task rejection (unchanged)
+- Evidence: `/Users/sainthenry/Documents/ChatGPT/Computer use/outputs/magpie-compatible-fix-20261017/live-ab-after-fix.json`
