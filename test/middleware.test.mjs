@@ -164,7 +164,7 @@ test("Responses honors sealedTaskModel override", () => {
   assert.deepEqual(body.input[0], item);
 });
 
-test("Responses leaves non-native encrypted agent_message content alone", () => {
+test("Responses rewrites non-native encrypted agent_message content to a user message", () => {
   const item = {
     type: "agent_message",
     author: "/root",
@@ -177,7 +177,11 @@ test("Responses leaves non-native encrypted agent_message content alone", () => 
   const body = responses({ input: [structuredClone(item)] });
   run(body, "responses");
   assert.equal(body.model, "opendesign/claude-haiku-5.5");
-  assert.deepEqual(body.input[0], item);
+  assert.deepEqual(body.input, [{
+    type: "message",
+    role: "user",
+    content: item.content
+  }]);
 });
 
 test("Responses leaves plaintext agent_message alone for non-relay models", () => {

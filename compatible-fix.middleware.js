@@ -212,7 +212,9 @@ function normalizePlainAgentMessages(body) {
   for (let i = 0; i < body.input.length; i += 1) {
     const item = body.input[i];
     if (!object(item) || item.type !== "agent_message") continue;
-    if (hasEncryptedContent(item.content)) continue;
+    // Leave ChatGPT-native sealed tasks for remount/passthrough. Rewrite every
+    // other agent_message, including non-native encrypted_content strings.
+    if (hasNativeSealedContent(item.content)) continue;
     const next = { type: "message", role: "user" };
     if ("content" in item) next.content = item.content;
     if (typeof item.id === "string") next.id = item.id;
