@@ -49,3 +49,8 @@ The middleware runs on the request the agent sends. Magpie's own
 through gateway middleware, so this plugin cannot fix Haiku thinking or
 output limits on that internal summary request. Native tool-search history
 handling belongs to Magpie; these checks cover client gateway transports.
+
+Since 0.2.5 this package also contains a provider transport hook for Open Design
+DeepSeek checkpoint compaction. That hook reaches internal summary requests and
+normalizes their history; the Haiku thinking/output-limit boundary above still
+applies.

@@ -258,11 +258,13 @@ test("handles non-object requests and unknown protocols", () => {
   assert.deepEqual(onRequest(body, { protocol: "gemini", options: {} }), before);
 });
 
-test("package is middleware-only and ships the file it declares", async () => {
+test("package ships both gateway middleware and the compaction provider hook", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url)));
-  assert.equal(pkg.main, undefined);
+  assert.equal(pkg.main, "./compact-transport.mjs");
   assert.equal(pkg.exports, undefined);
   assert.equal(pkg.dependencies, undefined);
+  assert.ok(pkg.files.includes("compact-transport.mjs"));
+  assert.ok((await readFile(new URL(`../${pkg.main}`, import.meta.url), "utf8")).includes("export default async function"));
   assert.ok((await readFile(new URL(`../${pkg.magpie.middleware}`, import.meta.url), "utf8")).includes("export function onRequest"));
 });
 

@@ -284,3 +284,157 @@ test or a direct test of Magpie's internal compaction-summary request.
 - Found a second failure at about 32 KB of tool JSON. Added `maxToolBytes` default 30000; small namespaces first, oversized optional namespace skipped.
 - Captured real failing request replayed through Magpie: HTTP 200, `response.completed`, expected text `REPLAY_OK_FINAL`.
 - Unit tests: 90/90 pass at `magpie-compatible-fix` 0.2.2.
+
+## 2026-10-18 namespace response restoration (0.2.3)
+
+Environment: official Magpie 0.1.1279, macOS, Node.js v22.23.1.
+
+- The failed Steam chat returned `collaboration__spawn_agent` without a namespace;
+  Codex rejected it with `unsupported call`. Request-side middleware flattening
+  had removed the namespace map before Magpie parsed the request.
+- Record exact original namespace/function mappings in per-request state and
+  restore known function calls on JSON output, SSE item added/done,
+  arguments-done, and terminal output snapshots. Supply
+  `encrypted_function_args: []` only when absent. Preserve existing metadata,
+  arguments, and IDs; leave collisions and unknown names untouched.
+- Remove boolean `encrypted` annotations from flattened function schemas,
+  matching Magpie's native translator. A live probe exposed ciphertext delivery
+  when those flags remained; the final probe delivered a readable task.
+  Native Codex tool schemas retain their annotations.
+- `npm run check`, `npm test`: **99/99 pass**; `git diff --check` and
+  `npm pack --dry-run` pass. A Haiku worker independently repeated the syntax,
+  unit, and whitespace checks successfully.
+- `node scripts/test-namespace-gateway.mjs`: **8/8 real-Magpie checks pass**
+  against a disposable local upstream. Previous middleware commit `7711d99`
+  returns the broken flat name; current source restores the native shape on
+  `/v1/responses` and `/backend-api/codex/responses`, JSON and SSE.
+  Captured schemas retain `encrypted: true` before and omit it after.
+- Installed runtime matches the verified middleware SHA-256
+  `4b66400d11c18b59ad942749abf93b360502dafe29fa1c4abbd2c7efbb3467d1`.
+  Existing plugin selection/options are byte-identical. Previous runtime files
+  and plugin configuration are backed up under
+  `~/.config/magpie/rollback-namespace-20261018-011603`.
+- Live `cursor/auto` through the running gateway returned HTTP 200 and
+  `name: spawn_agent`, `namespace: collaboration`,
+  `encrypted_function_args: []`, with plaintext task arguments.
+- Actual Codex worker `namespace_plaintext_probe` spawned and returned
+  **`NAMESPACE_FIX_OK`**, then ran the independent validation task.
+  The accepted native call is recorded at line 733 of
+  `~/.codex/sessions/2026/10/18/rollout-2026-10-18T00-15-30-01a14aa5-9d68-7302-bd76-ee6834bc5b65.jsonl`.
+
+## 2026-10-18 DeepSeek request trim and tool_choice (0.2.4)
+
+Environment: official Magpie (live hello version checked at install time), macOS,
+Node.js local unit tests.
+
+- Overnight Magpie gateway failures included six Open Design HTTP 413
+  `length limit exceeded` responses on session `01a14a8e` after ~520k-token
+  history with ~37 MB `data:image` tool outputs, plus one HTTP 400
+  `Thinking mode does not support this tool_choice` on
+  `opendesign/deepseek-v4.1-flash` (usage line 18872, chat→responses, effort high).
+- Plugin-only middleware now targets provider-prefixed Open Design DeepSeek on
+  Responses and Chat: strip `data:image/*` payloads (`stripDataImages` default
+  true), truncate oldest oversized tool results under `maxRequestBytes`
+  (default 20 MiB), and coerce forced/`required` `tool_choice` to `auto` when
+  thinking/reasoning effort is active. Native Codex models are skipped.
+- Out of scope for this plugin: Magpie Bun plugin-host 32 MiB `maxWireLine` IPC
+  (`host.go`), Cursor region 403, client 499, and upstream 524 timeouts.
+- `npm run check`, `npm test`: unit suite green including new
+  `test/request-trim.test.mjs` and `test/tool-choice.test.mjs`.
+
+- Installed from the source checkout after backup
+  `~/.config/magpie/rollback-request-trim-20261018-094913` (previous github 0.2.3
+  middleware SHA-256 `4b66400d11c18b59ad942749abf93b360502dafe29fa1c4abbd2c7efbb3467d1`).
+  Removed the github:HachinRo/magpie-compatible-fix entry so only the path plugin
+  remains active: `/Users/sainthenry/Documents/Codex/magpie-compatible-fix`.
+- `magpie plugin list --json` middleware hooks: `onRequest`, `onEvent`, `onResponse`.
+  Package version `0.2.4`; middleware SHA-256
+  `31712e77effbe5b1e5f3e3f17d06722029205d0979b7d6f09cc7270afd07fc35`.
+- Live local LAN probe against Magpie `:3425` `/v1/chat/completions` with
+  `opendesign/deepseek-v4.1-flash`, `reasoning_effort: high`, and forced function
+  `tool_choice`: HTTP **200** (`OK`); not the previous HTTP 400 tool_choice error.
+  Oversized `data:image` trimming verified primarily by unit tests (avoiding a
+  multi‑MB live body that can also trip Magpie plugin-host 32 MiB IPC).
+- Not pushed to GitHub in this pass.
+
+## 2026-10-18 internal DeepSeek checkpoint compaction (0.2.5)
+
+- Reported automation session: `01a14a9b-9e0b-73c0-9a93-d09ec2155785`.
+  Open Design refused its internal summary request three times with HTTP 422,
+  including request ID `21fe9161-ce71-4dcb-8377-d6bed85e11c9`:
+  `messages[44]: missing field role`.
+- The captured request has 402 Responses input items, including reasoning,
+  calls, multipart outputs, and images. Magpie's `codexCompact` calls `s.serve`
+  directly, bypassing `serveAgent` gateway middleware. A missing-role error is
+  the relay's parsing symptom; small string and multipart-text tool histories
+  both compacted successfully before this fix.
+- Added an OpenCode provider entry (`compact-transport.mjs`) alongside the
+  existing gateway middleware. Its `chat.headers` hook wraps the mutable
+  Open Design provider options' existing fetch once per account options
+  object. This reaches internal summary requests without modifying Magpie.
+- The wrapper targets HTTPS Open Design `/responses`, wire model
+  `deepseek-v4.1-flash`, and a final checkpoint compaction prompt with roleless
+  history. It serializes visible messages, calls, tool outputs, and reasoning
+  summaries into a labeled user transcript followed by the original summary
+  prompt. Images become placeholders; opaque reasoning and item metadata are
+  omitted. Ordinary requests, other models, and other hosts pass unchanged.
+- `npm run check` and `npm test`: **125/125** passed. `npm pack --dry-run`
+  includes the transport entry. Tests cover narrow matching, namespace names,
+  multipart/structured results, image omission, headers, signals, and custom
+  fetch preservation. The attempted isolated provider fixture could not
+  register models; acceptance instead uses the real failing capture live.
+- Live Magpie **0.1.1285**, before install: replaying the captured 402-item
+  history through `/backend-api/codex/responses` reproduced **HTTP 422**,
+  `messages[44]: missing field role`, request ID
+  `2cf48a1a-6f1d-4eb6-813f-4371130ee63e`.
+- After `magpie plugin add /Users/sainthenry/Documents/Codex/magpie-compatible-fix`,
+  the same history completed in **14.17 seconds**, **HTTP 200**,
+  `response.completed`, with a `magpie1:` compaction item containing a
+  **3,230-character** model summary. The upstream capture independently shows
+  two user messages and **HTTP 200** at `2026-10-18T02:11:19.687Z`; no local
+  fallback summary was used. The offline rewritten wire body is 819,522 bytes,
+  down from 2,903,145 bytes.
+- A post-install ordinary DeepSeek Responses request also returned HTTP 200,
+  `response.completed`, and the requested `COMPAT_ORDINARY_OK` marker in
+  **2.26 seconds**.
+- Rollback: `~/.config/magpie/rollback-compaction-transport-20261018-100508`.
+  Source/config backups are retained. The binary SHA-256 is unchanged:
+  `e7d333f71e95a643815f1a1e7c2732d1137c9cc10a29347cc5f241ad956f7c07`.
+- This verifies replay of the failed compaction history. It does not restart
+  the scheduled automation or prove its later publication steps completed.
+  Version **0.2.5** is installed from the local checkout, not pushed to GitHub.
+
+## 2026-10-18 Open Design inline data:image capability reject (0.2.6)
+
+- Unit tests in `test/inline-images.test.mjs` cover the `rejectInlineDataImages`
+  default-true path: chat and Responses `data:image/` payloads on Open Design
+  DeepSeek and a non-DeepSeek Open Design model return HTTP 400 with the body left
+  unchanged; HTTP(S) image URLs and Codex models are not rejected; and
+  `rejectInlineDataImages: false` keeps the DeepSeek chat strip behavior.
+- Existing strip/truncate tests in `test/request-trim.test.mjs` pass
+  `rejectInlineDataImages: false` explicitly.
+- No live LAN-PC results are recorded in this entry.
+
+## 2026-10-18 Open Design DeepSeek vision correction (0.2.7)
+
+- Live Open Design Chat Completions for `deepseek-v4.1-flash`:
+  - Catalog declares `input_modalities: ["text","image"]`.
+  - HTTPS image descriptions matched the supplied photos for two different
+    subjects (art supplies; tabby-and-white cat with yellow bandana).
+  - Text-only control returned `NO_IMAGE_ACCESS`.
+  - Invalid image URL returned HTTP 400 download failure.
+  - Newly generated nonce image with code `8240F650` and shapes
+    red square / blue circle / green triangle was recognized from both
+    inline PNG and inline JPEG.
+- Local Magpie gateway (`127.0.0.1:3425`) with this checkout:
+  - Chat Completions PNG/JPEG nonce probes returned HTTP 200 and exact code.
+  - Responses `view_image` tool-output with nested `input_image` returned HTTP
+    200 and the exact code/shapes.
+- Policy correction:
+  - Defaults: `rejectInlineDataImages=false`, `stripDataImages=false`.
+  - Image-bearing tool results are skipped by body-size truncation.
+  - Unit suite: 135 passed after the correction.
+- Not established by these probes: the Windows Magpie account/route that first
+  reported a historical PNG rejection, nor upload/hosting support for oversized
+  bodies.
+

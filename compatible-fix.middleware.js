@@ -23,7 +23,15 @@
 //
 // Namespaced tools: Magpie's translator flattens namespace tools to
 //    namespace__name, but Responses passthrough leaves them intact. Open Design
-//    refuses the raw namespace tool. Flatten tools and historical calls here.
+//    refuses the raw namespace tool. Flatten tools and historical calls here,
+//    then restore the client's namespace on returned calls using request state.
+//
+// Open Design DeepSeek oversized bodies: preserve images by default and
+//    truncate oldest text tool results. Image stripping and rejection are
+//    explicit operator policies; live PNG/JPEG vision probes both succeeded.
+//
+// Open Design DeepSeek thinking + tool_choice: thinking mode rejects forced
+//    tool_choice forms; coerce those to "auto" while preserving auto/none.
 const MODEL = /(?:^|\/)(?:anthropic\.)?(?:claude[-_.])?haiku[-_.]?5[-_.]5(?:-\d{8})?(?:@[-\w.]+)?$/i;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // Output-token limits apply to provider-prefixed relay IDs.
@@ -226,6 +234,63 @@ function normalizePlainAgentMessages(body) {
   }
 }
 
+function rememberNamespaceTools(body, ctx) {
+  if (!Array.isArray(body.tools)) return;
+  const named = [];
+  const base = [];
+  for (const tool of body.tools) {
+    if (!object(tool)) continue;
+    if (tool.type !== "namespace") {
+      if (typeof tool.name === "string") base.push(tool.name);
+      continue;
+    }
+    if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
+    for (const sub of tool.tools) {
+      if (!object(sub) || sub.type !== "function" || typeof sub.name !== "string" || !sub.name) continue;
+      named.push({ flat: tool.name + "__" + sub.name, namespace: tool.name, name: sub.name });
+    }
+  }
+  if (!named.length) return;
+  if (!object(ctx.state)) ctx.state = {};
+  // Do not guess at "__" boundaries or shadow a genuine top-level function.
+  ctx.state.namespaceTools = named.filter(entry =>
+    base.indexOf(entry.flat) < 0 &&
+    !named.some(other => other.flat === entry.flat &&
+      (other.namespace !== entry.namespace || other.name !== entry.name)));
+}
+
+function restoreNamespaceCall(item, ctx) {
+  if (!object(item) || typeof item.name !== "string" || item.namespace) return;
+  const named = object(ctx) && object(ctx.state) ? ctx.state.namespaceTools : null;
+  if (!Array.isArray(named)) return;
+  for (const entry of named) {
+    if (entry.flat !== item.name) continue;
+    item.name = entry.name;
+    item.namespace = entry.namespace;
+    // Plain relay arguments must not be treated as ChatGPT-sealed task text.
+    if (!("encrypted_function_args" in item)) item.encrypted_function_args = [];
+    return;
+  }
+}
+
+function restoreNamespaceOutput(body, ctx) {
+  if (!object(body) || !Array.isArray(body.output)) return;
+  for (const item of body.output) {
+    if (object(item) && item.type === "function_call") restoreNamespaceCall(item, ctx);
+  }
+}
+
+function unsealedSchema(value) {
+  if (Array.isArray(value)) return value.map(unsealedSchema);
+  if (!object(value)) return value;
+  const out = {};
+  for (const key of Object.keys(value)) {
+    // Match Magpie's translator: a flattened relay tool must request plaintext.
+    if (key !== "encrypted" || typeof value[key] !== "boolean") out[key] = unsealedSchema(value[key]);
+  }
+  return out;
+}
+
 function flattenNamespaceTools(body, options) {
   const budget = Number.isSafeInteger(options.maxToolBytes) && options.maxToolBytes >= 2
     ? options.maxToolBytes : 30000;
@@ -243,6 +308,7 @@ function flattenNamespaceTools(body, options) {
         const sub = tool.tools[j];
         if (!object(sub) || sub.type !== "function" || typeof sub.name !== "string") continue;
         const next = { ...sub, name: tool.name + "__" + sub.name };
+        if (object(sub.parameters)) next.parameters = unsealedSchema(sub.parameters);
         if (typeof tool.description === "string" && tool.description) {
           next.description = tool.description + "\n\n" + (sub.description || "");
         }
@@ -269,6 +335,203 @@ function flattenNamespaceTools(body, options) {
       delete item.namespace;
     }
   }
+}
+
+
+function openDesignDeepSeek(model) {
+  if (typeof model !== "string" || !model) return false;
+  // Native Codex lanes must keep full history and tool_choice semantics.
+  if (/^codex\//i.test(model)) return false;
+  if (/deepseek-v4\.1-flash/i.test(model)) return true;
+  return /(?:^|\/)opendesign\//i.test(model) && /deepseek/i.test(model);
+}
+
+function openDesignRelay(model) {
+  if (typeof model !== "string" || !model) return false;
+  if (/^codex\//i.test(model)) return false;
+  return /(?:^|\/)opendesign\//i.test(model) || /deepseek-v4\.1-flash/i.test(model);
+}
+
+function requestBytes(body) {
+  const text = JSON.stringify(body);
+  if (typeof TextEncoder === "function") return new TextEncoder().encode(text).length;
+  return text.length;
+}
+
+function dataImagePlaceholder(value) {
+  const bytes = typeof TextEncoder === "function"
+    ? new TextEncoder().encode(value).length
+    : value.length;
+  return "[omitted data:image; original_bytes=" + bytes + "]";
+}
+
+function replaceDataImageString(value) {
+  if (typeof value !== "string" || value.indexOf("data:image/") < 0) return value;
+  if (/^data:image\//i.test(value)) return dataImagePlaceholder(value);
+  return value.replace(/data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g, dataImagePlaceholder);
+}
+
+function stripDataImagesInValue(value) {
+  if (typeof value === "string") return replaceDataImageString(value);
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) value[i] = stripDataImagesInValue(value[i]);
+    return value;
+  }
+  if (!object(value)) return value;
+  if (typeof value.image_url === "string") value.image_url = replaceDataImageString(value.image_url);
+  else if (object(value.image_url) && typeof value.image_url.url === "string") {
+    value.image_url.url = replaceDataImageString(value.image_url.url);
+  }
+  if (typeof value.url === "string") value.url = replaceDataImageString(value.url);
+  if (typeof value.text === "string") value.text = replaceDataImageString(value.text);
+  if (typeof value.output === "string") value.output = replaceDataImageString(value.output);
+  if ("content" in value) value.content = stripDataImagesInValue(value.content);
+  if (Array.isArray(value.parts)) value.parts = stripDataImagesInValue(value.parts);
+  return value;
+}
+
+function hasDataImageString(value) {
+  if (typeof value === "string") return /data:image\/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9=.+-]+)*,/i.test(value);
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) if (hasDataImageString(value[i])) return true;
+    return false;
+  }
+  if (!object(value)) return false;
+  if (typeof value.image_url === "string" && hasDataImageString(value.image_url)) return true;
+  if (object(value.image_url) && typeof value.image_url.url === "string" &&
+      hasDataImageString(value.image_url.url)) return true;
+  if (typeof value.url === "string" && hasDataImageString(value.url)) return true;
+  if (typeof value.text === "string" && hasDataImageString(value.text)) return true;
+  if ("output" in value && hasDataImageString(value.output)) return true;
+  if ("content" in value && hasDataImageString(value.content)) return true;
+  if (Array.isArray(value.parts) && hasDataImageString(value.parts)) return true;
+  return false;
+}
+
+function requestHasDataImages(body) {
+  if (hasDataImageString(body.input) || hasDataImageString(body.messages)) return true;
+  return false;
+}
+
+function rejectUnsupportedInlineDataImages(body, model, protocol, options, ctx) {
+  if (options.rejectInlineDataImages !== true) return;
+  if (protocol !== "chat" && protocol !== "responses") return;
+  if (!openDesignRelay(model)) return;
+  if (!requestHasDataImages(body)) return;
+  return ctx.reject(
+    400,
+    "magpie-compatible-fix: inline data:image payloads are blocked by the " +
+      "rejectInlineDataImages operator policy. Set rejectInlineDataImages=false " +
+      "to preserve image input, or provide an HTTP(S) image URL. History was left unchanged."
+  );
+}
+
+function stripRequestDataImages(body) {
+  if ("input" in body) body.input = stripDataImagesInValue(body.input);
+  if ("messages" in body) body.messages = stripDataImagesInValue(body.messages);
+}
+
+function headTailText(text, head, tail) {
+  if (typeof text !== "string") return text;
+  if (text.length <= head + tail + 64) return text;
+  const omitted = text.length - head - tail;
+  return text.slice(0, head) + "\n[truncated tool result; omitted_chars=" + omitted + "]\n" + text.slice(-tail);
+}
+
+function toolResultEntries(body) {
+  const entries = [];
+  if (Array.isArray(body.input)) {
+    for (let i = 0; i < body.input.length; i += 1) {
+      const item = body.input[i];
+      if (!object(item)) continue;
+      if (item.type !== "function_call_output" && item.type !== "tool_result" &&
+          item.type !== "custom_tool_call_output") continue;
+      if (hasDataImageString(item)) continue;
+      if (typeof item.output === "string") {
+        entries.push({
+          get() { return item.output; },
+          set(value) { item.output = value; }
+        });
+      } else if (typeof item.content === "string") {
+        entries.push({
+          get() { return item.content; },
+          set(value) { item.content = value; }
+        });
+      } else if (Array.isArray(item.output) || Array.isArray(item.content)) {
+        const key = Array.isArray(item.output) ? "output" : "content";
+        entries.push({
+          get() { return JSON.stringify(item[key]); },
+          set(value) { item[key] = [{ type: "input_text", text: value }]; }
+        });
+      }
+    }
+  }
+  if (Array.isArray(body.messages)) {
+    for (let i = 0; i < body.messages.length; i += 1) {
+      const message = body.messages[i];
+      if (!object(message) || (message.role !== "tool" && message.role !== "function")) continue;
+      if (hasDataImageString(message)) continue;
+      if (typeof message.content === "string") {
+        entries.push({
+          get() { return message.content; },
+          set(value) { message.content = value; }
+        });
+      } else if (Array.isArray(message.content)) {
+        entries.push({
+          get() { return JSON.stringify(message.content); },
+          set(value) { message.content = value; }
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function truncateOldestToolResults(body, budget) {
+  const entries = toolResultEntries(body);
+  const passes = [[4096, 2048], [1024, 512], [256, 128]];
+  for (let p = 0; p < passes.length; p += 1) {
+    if (requestBytes(body) <= budget) return;
+    const head = passes[p][0];
+    const tail = passes[p][1];
+    for (let i = 0; i < entries.length; i += 1) {
+      if (requestBytes(body) <= budget) return;
+      const text = entries[i].get();
+      if (typeof text !== "string" || text.length <= head + tail + 64) continue;
+      entries[i].set(headTailText(text, head, tail));
+    }
+  }
+}
+
+function trimOpenDesignDeepSeekRequest(body, options) {
+  const budget = Number.isSafeInteger(options.maxRequestBytes) && options.maxRequestBytes >= 1024
+    ? options.maxRequestBytes : 20 * 1024 * 1024;
+  const stripImages = options.stripDataImages === true;
+  const bytes = requestBytes(body);
+  const images = stripImages && requestHasDataImages(body);
+  // Skip when already under budget and there is nothing image-related to strip.
+  if (bytes <= budget && !images) return;
+  if (images) stripRequestDataImages(body);
+  if (requestBytes(body) > budget) truncateOldestToolResults(body, budget);
+}
+
+function deepSeekThinkingActive(body) {
+  const thinking = object(body.thinking) ? body.thinking : {};
+  if (thinking.type === "enabled" || thinking.type === "adaptive") return true;
+  if (typeof thinking.budget_tokens === "number" && Number.isFinite(thinking.budget_tokens) &&
+      thinking.budget_tokens > 0) return true;
+  if (thinking.type === "disabled") return false;
+  const reasoning = object(body.reasoning) ? body.reasoning : {};
+  const output = object(body.output_config) ? body.output_config : {};
+  const selected = effort(reasoning.effort) || effort(output.effort) || effort(body.reasoning_effort);
+  return Boolean(selected && selected !== "none");
+}
+
+function coerceDeepSeekToolChoice(body) {
+  const choice = body.tool_choice;
+  if (choice === undefined || choice === null || choice === "auto" || choice === "none") return;
+  // "required" and forced/object tool_choice forms break DeepSeek thinking mode.
+  body.tool_choice = "auto";
 }
 
 function remountSealedAgentTasks(body, options) {
@@ -302,6 +565,10 @@ export function onRequest(body, ctx) {
   const rejected = clampTokens(body, model, options, ctx);
   if (rejected !== undefined) return rejected;
 
+  // Fail before any rewrite so the client's history remains intact.
+  const inlineReject = rejectUnsupportedInlineDataImages(body, model, ctx.protocol, options, ctx);
+  if (inlineReject !== undefined) return inlineReject;
+
   const thinking = object(body.thinking) ? body.thinking : {};
   const output = object(body.output_config) ? body.output_config : {};
   const reasoning = object(body.reasoning) ? body.reasoning : {};
@@ -316,6 +583,8 @@ export function onRequest(body, ctx) {
   const off = mode === "disabled" || selected === "none" || thinking.type === "disabled";
 
   if (ctx.protocol === "responses") {
+    // Capture before flattening, including group routes resolved after this hook.
+    rememberNamespaceTools(body, ctx);
     // Provider-prefixed non-Codex models take Magpie's Responses passthrough.
     if (relayModel(model)) {
       remountSealedAgentTasks(body, options);
@@ -347,6 +616,12 @@ export function onRequest(body, ctx) {
     delete body.reasoning_effort;
   }
 
+  const active = typeof body.model === "string" ? body.model : model;
+  if (openDesignDeepSeek(active) && (ctx.protocol === "responses" || ctx.protocol === "chat")) {
+    trimOpenDesignDeepSeekRequest(body, options);
+    if (deepSeekThinkingActive(body)) coerceDeepSeekToolChoice(body);
+  }
+
   if (options.removeSampling !== false) {
     delete body.temperature;
     delete body.top_p;
@@ -356,6 +631,12 @@ export function onRequest(body, ctx) {
 }
 
 export function onEvent(event, ctx) {
+  if (object(event)) {
+    if ((event.type === "response.output_item.added" || event.type === "response.output_item.done") &&
+        object(event.item) && event.item.type === "function_call") restoreNamespaceCall(event.item, ctx);
+    if (event.type === "response.function_call_arguments.done") restoreNamespaceCall(event, ctx);
+    restoreNamespaceOutput(event.response, ctx);
+  }
   if (!object(event) || !Array.isArray(event.choices) || !dsmlModel(event, ctx)) return event;
   for (let i = 0; i < event.choices.length; i += 1) {
     const choice = event.choices[i];
@@ -375,6 +656,7 @@ export function onEvent(event, ctx) {
 }
 
 export function onResponse(body, ctx) {
+  restoreNamespaceOutput(body, ctx);
   if (object(body) && dsmlModel(body, ctx)) foldChat(body);
   return body;
 }

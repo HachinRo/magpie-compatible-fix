@@ -5,6 +5,63 @@ limits its output tokens, removes unsupported sampling, repairs DeepSeek
 DSML tool calls, and rewrites MultiAgentV2 plaintext `agent_message` items
 for Responses passthrough relays.
 
+**Corrected (0.2.7, 2026-10-18):** Live Open Design
+`deepseek-v4.1-flash` has working vision. It read an unpredictable code and three
+colored shapes correctly from both inline PNG and JPEG; HTTPS image descriptions
+also matched the supplied pictures. The 0.2.6 assumption that this route rejects
+all inline images was wrong. Requests now preserve image bytes by default:
+`rejectInlineDataImages` and `stripDataImages` both default to `false`.
+Image-bearing tool results are also excluded from automatic body-size truncation.
+
+`rejectInlineDataImages=true` is an explicit local operator policy, not a claim
+that the model lacks vision. `stripDataImages=true` retains the older lossy
+DeepSeek body-size workaround as an explicit opt-in. Large image bodies can still
+exceed the upstream size limit; this package does not upload or host images.
+The original Windows failure needs its exact request/account/route checked;
+these successful probes do not establish that every Open Design account or model
+accepts the same payload.
+
+**Fixed (0.2.5, 2026-10-18):** Open Design DeepSeek compaction rejected
+Responses history with `messages[i]: missing field role`. Magpie's internal
+summary requests bypass gateway middleware. This package now also loads a
+provider hook that wraps the existing Open Design fetch for DeepSeek only.
+For a Responses checkpoint compaction with roleless history items, it sends
+the visible conversation as a labeled transcript and retains the final summary
+prompt. Tool calls, tool results, and visible reasoning summaries remain in the
+transcript; opaque reasoning and item metadata are omitted.
+The hook preserves the provider's authentication, fetch, signal, and response
+stream. It does not change ordinary turns or other providers. This transport
+hook depends on Magpie passing its mutable provider options to `chat.headers`;
+gateway middleware alone cannot repair this internal compaction path.
+
+**Fixed (2026-10-18):** Open Design DeepSeek rejected oversized chat/Responses
+bodies with HTTP 413 `length limit exceeded` after large `data:image` tool
+history accumulated, and thinking mode rejected forced `tool_choice` with HTTP
+400. The original 0.2.5 workaround for provider-prefixed Open Design DeepSeek models:
+- strips `data:image/*` URLs/strings from `input` / `messages` / tool results
+  into short `original_bytes` placeholders (now requires `stripDataImages=true`)
+- if still over `maxRequestBytes` (default 20 MiB), truncates oldest oversized
+  `function_call_output` / tool-result text to head+tail placeholders while
+  preserving `call_id` / structure
+- when thinking/reasoning effort is active, coerces unsupported `tool_choice`
+  values (`required`, forced/object forms) to `"auto"` and preserves
+  `auto` / `none` / absent
+Native Codex models are never trimmed or coerced. Magpie Bun plugin-host
+32 MiB `maxWireLine` IPC errors, Cursor region 403s, client 499s, and upstream
+524 timeouts remain outside this middleware.
+
+**Fixed (2026-10-18):** request-side namespace flattening discarded Magpie's
+reverse map, so a returned `collaboration__spawn_agent` failed in Codex with
+`unsupported call`. The middleware now records the original function namespaces
+in per-request state before flattening and restores `name`, `namespace`, and
+supplies `encrypted_function_args: []` when absent on whole and streaming Responses.
+This includes route groups such as `group/by-difficulty`. Existing encryption
+metadata and already namespaced calls are preserved. Unknown flattened names
+and ambiguous mappings are left unchanged.
+Flattened function schemas also drop boolean `encrypted` annotations, matching
+Magpie's translator, so a backend cannot seal a task that the translated response
+declares plaintext. Native Codex schemas keep their encryption annotations.
+
 **Fixed (2026-10-17):** Open Design refuses a Responses `agent_message` input
 item with HTTP 400 `upstream_error`. Magpie converts that item when translating
 protocols, but Responses passthrough leaves it intact. This middleware rewrites
@@ -59,6 +116,9 @@ path.
 | `models` | extra full model ids to match |
 | `sealedTaskModel` | model used when a ChatGPT-sealed subagent task arrives on a non-Codex model; default `codex/gpt-6.1-sol` |
 | `maxToolBytes` | default `30000`; flatten small namespaces and skip an oversized optional namespace so Open Design accepts the tool payload |
+| `maxRequestBytes` | default `20971520` (20 MiB); best-effort truncation of oldest DeepSeek text tool results; image-bearing results stay intact by default |
+| `stripDataImages` | default `false`; explicit opt-in to lossy replacement of inline DeepSeek image payloads with placeholders |
+| `rejectInlineDataImages` | default `false`; explicit operator policy to block inline Open Design images with HTTP 400; default preserves verified vision input |
 
 See [VALIDATION.md](./VALIDATION.md) for the dated test record.
 
@@ -152,6 +212,8 @@ Anthropic 请求修正示例：
   "removeSampling": true,
   "maxOutputTokens": 128000,
   "maxOutputTokensByModel": {},
+  "stripDataImages": true,
+  "rejectInlineDataImages": false,
   "models": []
 }
 ```
@@ -192,10 +254,16 @@ magpie model output opendesign/claude-haiku-5.5 127999
 ```sh
 npm run check
 npm test
+npm run test:namespace:gateway
 npm pack --dry-run
 ```
 
 没有需要安装的依赖。测试覆盖模型匹配、五档强度、关闭值、配置覆盖、结构化输出、工具调用、签名、幂等性、DSML 文本保留、输出 token 上限以及原生 Codex 保持不变。
+
+The namespace gateway test uses real Magpie/moejs with disposable configuration
+and a local Responses upstream. It compares the previous middleware with the
+current source on `/v1/responses` and `/backend-api/codex/responses`, for JSON
+and SSE. Set `MAGPIE_BIN` if Magpie is not at `~/.local/bin/magpie`.
 
 完整 ON/OFF 回归（默认测试已安装副本，可用 `MAGPIE_PLUGIN` 指定 checkout；仅使用隔离配置和本地 mock）：
 
